@@ -1,0 +1,19 @@
+# Build artifacts
+node_modules/
+pkg/
+target/
+*.tmp
+
+*.lock
+!/Cargo.lock
+
+# BL4 data files
+/share/*
+
+# Backup files
+*.bak
+*.bak.json
+
+# Non-git hidden file patterns
+.*
+!.git*
