@@ -1,7 +1,5 @@
 # OnTheBorder
 
-Borderlands 4 save editor library and CLI tool.
-
 ## Features
 
 - Decrypt and encrypt .sav files using Steam ID
@@ -101,7 +99,7 @@ bl4 decode '@Ugr$ZCm/&tH!t{KgK/Shxu>k'
 bl4 decode '@Uge8jxm/)@{!gQaYMipv(G&-b*Z~_' --verbose
 ```
 
-Decodes Borderlands 4 item serial numbers to show:
+Decodes BL4 item serial numbers to show:
 - Item type (weapon, equipment, utility, etc.)
 - Raw decoded bytes
 - Parsed tokens (VarInt, VarBit, Part structures)
@@ -216,6 +214,13 @@ Areas for contribution:
 1. Update versions in `Cargo.toml` files
 2. Commit and tag: `git tag v0.1.0 && git push origin v0.1.0`
 3. GitHub Actions handles publishing to crates.io, NPM, and binary releases
+
+## Disclaimer
+
+These are unofficial tools. Borderlands and all related marks are trademarks of
+Gearbox Software and 2K. Not affiliated with or endorsed by Gearbox Software or
+2K. **Use at your own risk.**
+
 
 ## Credits
 

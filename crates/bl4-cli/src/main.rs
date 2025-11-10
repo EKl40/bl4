@@ -210,7 +210,6 @@ fn main() -> Result<()> {
             let steam_id = get_steam_id(steam_id)?;
             // Read from file or stdin
             let encrypted = if let Some(path) = input {
-                eprintln!("Decrypting {} ...", path.display());
                 fs::read(&path).with_context(|| format!("Failed to read {}", path.display()))?
             } else {
                 let mut buf = Vec::new();
@@ -227,7 +226,6 @@ fn main() -> Result<()> {
             if let Some(path) = output {
                 fs::write(&path, &yaml_data)
                     .with_context(|| format!("Failed to write {}", path.display()))?;
-                eprintln!("Decrypted to {}", path.display());
             } else {
                 io::stdout()
                     .write_all(&yaml_data)
@@ -243,7 +241,6 @@ fn main() -> Result<()> {
             let steam_id = get_steam_id(steam_id)?;
             // Read from file or stdin
             let yaml_data = if let Some(path) = input {
-                eprintln!("Encrypting {} ...", path.display());
                 fs::read(&path).with_context(|| format!("Failed to read {}", path.display()))?
             } else {
                 let mut buf = Vec::new();
@@ -260,7 +257,6 @@ fn main() -> Result<()> {
             if let Some(path) = output {
                 fs::write(&path, &encrypted)
                     .with_context(|| format!("Failed to write {}", path.display()))?;
-                eprintln!("Encrypted to {}", path.display());
             } else {
                 io::stdout()
                     .write_all(&encrypted)
@@ -285,15 +281,7 @@ fn main() -> Result<()> {
 
             // Smart backup if requested
             if backup {
-                let backup_created =
-                    bl4::smart_backup(&input).context("Failed to manage backup")?;
-
-                if backup_created {
-                    let (backup_path, _) = bl4::backup::backup_paths(&input);
-                    eprintln!("Created backup: {}", backup_path.display());
-                } else {
-                    eprintln!("Backup exists (preserving original)");
-                }
+                let _ = bl4::smart_backup(&input).context("Failed to manage backup")?;
             }
 
             // Decrypt to temp file
@@ -313,7 +301,6 @@ fn main() -> Result<()> {
             })?;
 
             // Open editor
-            eprintln!("Opening {} in {}...", abs_temp_path.display(), editor_str);
             let mut cmd = Command::new(editor);
             cmd.args(&editor_args);
             cmd.arg(&abs_temp_path);
@@ -344,8 +331,6 @@ fn main() -> Result<()> {
                 bl4::update_after_edit(&input, &metadata_path)
                     .context("Failed to update backup metadata")?;
             }
-
-            eprintln!("Saved changes to {}", input.display());
         }
 
         Commands::Inspect {
@@ -354,7 +339,6 @@ fn main() -> Result<()> {
             full,
         } => {
             let steam_id = get_steam_id(steam_id)?;
-            eprintln!("Inspecting {} ...\n", input.display());
 
             let encrypted =
                 fs::read(&input).with_context(|| format!("Failed to read {}", input.display()))?;
@@ -459,15 +443,7 @@ fn main() -> Result<()> {
             let steam_id = get_steam_id(steam_id)?;
             // Smart backup if requested
             if backup {
-                let backup_created =
-                    bl4::smart_backup(&input).context("Failed to manage backup")?;
-
-                if backup_created {
-                    let (backup_path, _) = bl4::backup::backup_paths(&input);
-                    eprintln!("Created backup: {}", backup_path.display());
-                } else {
-                    eprintln!("Backup exists (preserving original)");
-                }
+                let _ = bl4::smart_backup(&input).context("Failed to manage backup")?;
             }
 
             // Read and decrypt
@@ -508,8 +484,6 @@ fn main() -> Result<()> {
                 bl4::update_after_edit(&input, &metadata_path)
                     .context("Failed to update backup metadata")?;
             }
-
-            eprintln!("Saved changes to {}", input.display());
         }
 
         Commands::Decode { serial, verbose } => {

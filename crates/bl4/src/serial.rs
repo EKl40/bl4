@@ -11,7 +11,8 @@
 //! Based on: https://github.com/Nicnl/borderlands4-serials
 
 /// Custom Base85 alphabet used by Borderlands 4
-const BL4_BASE85_ALPHABET: &[u8; 85] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{/}~";
+const BL4_BASE85_ALPHABET: &[u8; 85] =
+    b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{/}~";
 
 /// Errors that can occur during serial decoding
 #[derive(Debug, thiserror::Error)]
@@ -101,12 +102,12 @@ impl BitReader {
 /// Token types in the bitstream
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Separator,           // 00
-    SoftSeparator,       // 01
-    VarInt(u64),         // 100 + varint data
-    VarBit(u64),         // 110 + varbit data
-    Part { index: u64, values: Vec<u64> },  // 101 + part data
-    String(String),      // 111 + length + ascii
+    Separator,                             // 00
+    SoftSeparator,                         // 01
+    VarInt(u64),                           // 100 + varint data
+    VarBit(u64),                           // 110 + varbit data
+    Part { index: u64, values: Vec<u64> }, // 101 + part data
+    String(String),                        // 111 + length + ascii
 }
 
 /// Decoded item serial information
