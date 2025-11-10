@@ -217,9 +217,11 @@ Areas for contribution:
 
 ## Disclaimer
 
-These are unofficial tools. Borderlands and all related marks are trademarks of
-Gearbox Software and 2K. Not affiliated with or endorsed by Gearbox Software or
-2K. **Use at your own risk.**
+This repository contains unofficial tools. Borderlands and all related
+trademarks are property of Gearbox Software and 2K. This project is not
+affiliated with or endorsed by Gearbox Software or 2K.
+
+**Use at your own risk.**
 
 
 ## Credits
