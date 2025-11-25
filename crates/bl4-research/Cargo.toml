@@ -1,0 +1,8 @@
+[package]
+name = "bl4-research"
+version = "0.1.0"
+edition = "2021"
+description = "Research tools for BL4 reverse engineering"
+
+[dependencies]
+unreal_asset = "0.1"

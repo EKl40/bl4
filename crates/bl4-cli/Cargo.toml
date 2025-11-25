@@ -1,0 +1,21 @@
+[package]
+name = "bl4-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line tool for Borderlands 4 save editing"
+
+[[bin]]
+name = "bl4"
+path = "src/main.rs"
+
+[dependencies]
+bl4 = { version = "0.2.0", path = "../bl4" }
+clap.workspace = true
+anyhow.workspace = true
+serde_yaml.workspace = true
+serde = { workspace = true, features = ["derive"] }
+toml = "0.8"
+dirs = "5.0"

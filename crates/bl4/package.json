@@ -1,0 +1,36 @@
+{
+  "name": "bl4",
+  "version": "0.2.0",
+  "description": "Borderlands 4 save editor library - decrypt, modify, and encrypt save files",
+  "license": "BSD-2-Clause",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/monokrome/bl4.git"
+  },
+  "homepage": "https://github.com/monokrome/bl4",
+  "bugs": {
+    "url": "https://github.com/monokrome/bl4/issues"
+  },
+  "keywords": [
+    "borderlands",
+    "borderlands4",
+    "save-editor",
+    "game-save",
+    "wasm",
+    "webassembly",
+    "rust"
+  ],
+  "author": "bl4 Contributors",
+  "files": [
+    "bl4_bg.wasm",
+    "bl4.js",
+    "bl4.d.ts",
+    "README.md"
+  ],
+  "main": "bl4.js",
+  "module": "bl4.js",
+  "types": "bl4.d.ts",
+  "sideEffects": [
+    "./bl4.js"
+  ]
+}

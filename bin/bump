@@ -1,0 +1,78 @@
+#!/bin/bash
+set -e
+
+# Strip leading dash from argument
+ARG="${1#-}"
+
+# Get project root (script is in bin/)
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# File paths
+CARGO_TOML="$PROJECT_ROOT/Cargo.toml"
+CLI_CARGO_TOML="$PROJECT_ROOT/crates/bl4-cli/Cargo.toml"
+PACKAGE_JSON="$PROJECT_ROOT/crates/bl4/package.json"
+
+# Read current version from workspace Cargo.toml
+CURRENT_VERSION=$(grep '^version = ' "$CARGO_TOML" | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+if [ -z "$CURRENT_VERSION" ]; then
+    echo "Error: Could not read version from $CARGO_TOML"
+    exit 1
+fi
+
+# Parse version components
+IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+# Determine bump type
+case "$ARG" in
+    "M")
+        MAJOR=$((MAJOR + 1))
+        MINOR=0
+        PATCH=0
+        BUMP_TYPE="major"
+        ;;
+    "m")
+        MINOR=$((MINOR + 1))
+        PATCH=0
+        BUMP_TYPE="minor"
+        ;;
+    ""|"p")
+        PATCH=$((PATCH + 1))
+        BUMP_TYPE="patch"
+        ;;
+    *)
+        echo "Usage: bump [M|m|p]"
+        echo "  (no arg) or p : patch bump (0.1.3 → 0.1.4)"
+        echo "  m or -m       : minor bump (0.1.3 → 0.2.0)"
+        echo "  M or -M       : major bump (0.1.3 → 2.0.0)"
+        exit 1
+        ;;
+esac
+
+NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+
+echo "$CURRENT_VERSION -> $NEW_VERSION"
+
+# Update workspace Cargo.toml
+sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" "$CARGO_TOML"
+
+# Update bl4-cli dependency version
+sed -i "s/bl4 = { version = \"[^\"]*\"/bl4 = { version = \"$NEW_VERSION\"/" "$CLI_CARGO_TOML"
+
+# Update package.json
+sed -i "s/\"version\": \".*\"/\"version\": \"$NEW_VERSION\"/" "$PACKAGE_JSON"
+
+# Update Cargo.lock and format code
+cd "$PROJECT_ROOT"
+if command -v cargo &> /dev/null; then
+    CARGO_CMD="cargo"
+elif [ -f "$HOME/.cargo/bin/cargo" ]; then
+    CARGO_CMD="$HOME/.cargo/bin/cargo"
+else
+    echo "Error: cargo not found"
+    exit 1
+fi
+
+$CARGO_CMD update -p bl4 -p bl4-cli > /dev/null 2>&1
+$CARGO_CMD fmt --all > /dev/null 2>&1
+$CARGO_CMD clippy --all-targets --all-features -- -D warnings > /dev/null 2>&1
