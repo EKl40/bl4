@@ -98,16 +98,27 @@ pub fn category_name(category: i64) -> Option<&'static str> {
         16 => Some("Torgue Assault Rifle"),
         17 => Some("Vladof Assault Rifle"),
         18 => Some("Order Assault Rifle"),
+        // Maliwan Shotgun (gap filler)
+        19 => Some("Maliwan Shotgun"),
         // SMGs
         20 => Some("Daedalus SMG"),
         21 => Some("Bor SMG"),
         22 => Some("Vladof SMG"),
         23 => Some("Maliwan SMG"),
+        // Bor Sniper (gap filler)
+        25 => Some("Bor Sniper"),
         // Snipers
         26 => Some("Jakobs Sniper"),
         27 => Some("Vladof Sniper"),
         28 => Some("Order Sniper"),
         29 => Some("Maliwan Sniper"),
+        // Class Mods (derived from serial analysis - categories 44, 55, 97, 140)
+        44 => Some("Dark Siren Class Mod"),
+        55 => Some("Paladin Class Mod"),
+        97 => Some("Gravitar Class Mod"),
+        140 => Some("Exo Soldier Class Mod"),
+        // Firmware (category 151)
+        151 => Some("Firmware"),
         // Heavy Weapons
         244 => Some("Vladof Heavy"),
         245 => Some("Torgue Heavy"),
@@ -124,6 +135,7 @@ pub fn category_name(category: i64) -> Option<&'static str> {
         286 => Some("Tediore Shield"),
         287 => Some("Torgue Shield"),
         288 => Some("Vladof Shield"),
+        289 => Some("Shield Variant"),
         // Gadgets and Gear
         300 => Some("Grenade Gadget"),
         310 => Some("Turret Gadget"),

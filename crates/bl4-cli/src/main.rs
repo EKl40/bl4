@@ -730,6 +730,10 @@ fn main() -> Result<()> {
                 item.item_type,
                 item.item_type_description()
             );
+            if let Some(group_id) = item.part_group_id() {
+                let category_name = bl4::category_name(group_id).unwrap_or("Unknown");
+                println!("Category: {} ({})", category_name, group_id);
+            }
             if let Some(mfr) = item.manufacturer_name() {
                 println!("Manufacturer: {}", mfr);
             }
@@ -915,6 +919,9 @@ fn main() -> Result<()> {
                         ("VLA_Enhancement", 407, "Vladof Enhancement"),
                         ("COV_Enhancement", 408, "COV Enhancement"),
                         ("ATL_Enhancement", 409, "Atlas Enhancement"),
+                        // Class Mods (categories 44, 55, 97, 140)
+                        // Only classmod_gravitar has parts in the dump
+                        ("classmod_gravitar", 97, "Gravitar Class Mod"),
                     ];
 
                     let parts_json = std::fs::read_to_string(input)
