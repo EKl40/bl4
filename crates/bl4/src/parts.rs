@@ -58,20 +58,55 @@ pub struct PartInfo {
     pub modifier_type: Option<String>,
 }
 
-/// Manufacturer ID to name mapping
-/// Derived from analysis of item serials with known manufacturers
-pub fn manufacturer_name(id: u64) -> Option<&'static str> {
+/// First VarInt to (Manufacturer, Weapon Type) mapping
+/// For VarInt-first serial format (types a-g, u-z)
+/// Derived from verified in-game testing of CSV weapon data
+pub fn weapon_info_from_first_varint(id: u64) -> Option<(&'static str, &'static str)> {
     match id {
-        4 => Some("Daedalus"),
-        6 => Some("Torgue"),
-        10 => Some("Tediore"),
-        14 => Some("Ripper"),
-        15 => Some("Order"),
-        129 => Some("Jakobs"),
-        134 => Some("Vladof"),
-        138 => Some("Maliwan"),
+        // Shotguns (low IDs)
+        1 => Some(("Daedalus", "Shotgun")),
+        3 => Some(("Torgue", "Shotgun")),
+        5 => Some(("Maliwan", "Shotgun")),
+        9 => Some(("Jakobs", "Shotgun")),
+        13 => Some(("Tediore", "Shotgun")),
+        14 => Some(("Ripper", "Shotgun")),
+        // Pistols (low IDs)
+        2 => Some(("Order", "Pistol")),
+        4 => Some(("Daedalus", "Pistol")),
+        6 => Some(("Torgue", "Pistol")),
+        10 => Some(("Tediore", "Pistol")),
+        12 => Some(("Jakobs", "Pistol")),
+        // Assault Rifles (low IDs)
+        7 => Some(("Tediore", "AR")),
+        11 => Some(("Daedalus", "AR")),
+        15 => Some(("Order", "AR")),
+        // Snipers (high IDs, bit 7 set)
+        128 => Some(("Vladof", "Sniper")),
+        129 => Some(("Jakobs", "Sniper")),
+        133 => Some(("Order", "Sniper")),
+        137 => Some(("Maliwan", "Sniper")),
+        142 => Some(("Ripper", "Sniper")),
+        // SMGs (high IDs, bit 7 set)
+        130 => Some(("Daedalus", "SMG")),
+        134 => Some(("Vladof", "SMG")),
+        138 => Some(("Maliwan", "SMG")),
+        140 => Some(("Ripper", "SMG")),
+        // Assault Rifles (high IDs, bit 7 set)
+        132 => Some(("Vladof", "AR")),
+        136 => Some(("Torgue", "AR")),
+        141 => Some(("Jakobs", "AR")),
         _ => None,
     }
+}
+
+/// Extract just the manufacturer name from first VarInt
+pub fn manufacturer_name(id: u64) -> Option<&'static str> {
+    weapon_info_from_first_varint(id).map(|(mfg, _)| mfg)
+}
+
+/// Extract just the weapon type from first VarInt
+pub fn weapon_type_from_first_varint(id: u64) -> Option<&'static str> {
+    weapon_info_from_first_varint(id).map(|(_, wtype)| wtype)
 }
 
 /// Part Group ID (Category) to name mapping
@@ -364,9 +399,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_weapon_info_lookup() {
+        // Verified in-game: slot 3 Jakobs Pistol = first VarInt 12
+        assert_eq!(
+            weapon_info_from_first_varint(12),
+            Some(("Jakobs", "Pistol"))
+        );
+        // Verified in-game: slot 1 Vladof Sniper = first VarInt 128
+        assert_eq!(
+            weapon_info_from_first_varint(128),
+            Some(("Vladof", "Sniper"))
+        );
+        // Verified in-game: slot 2 Torgue AR = first VarInt 136
+        assert_eq!(
+            weapon_info_from_first_varint(136),
+            Some(("Torgue", "AR"))
+        );
+        // Verified in-game: slot 4 Maliwan SMG = first VarInt 138
+        assert_eq!(
+            weapon_info_from_first_varint(138),
+            Some(("Maliwan", "SMG"))
+        );
+        // Unknown ID returns None
+        assert_eq!(weapon_info_from_first_varint(999), None);
+    }
+
+    #[test]
     fn test_manufacturer_lookup() {
         assert_eq!(manufacturer_name(4), Some("Daedalus"));
-        assert_eq!(manufacturer_name(6), Some("Torgue"));
+        assert_eq!(manufacturer_name(136), Some("Torgue"));
         assert_eq!(manufacturer_name(138), Some("Maliwan"));
         assert_eq!(manufacturer_name(999), None);
     }

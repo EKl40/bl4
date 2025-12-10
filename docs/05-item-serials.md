@@ -306,22 +306,88 @@ Interpretation:
 
 ---
 
-## Manufacturer IDs
+## Serial Format Variants
 
-The first VarInt after the magic header identifies the manufacturer:
+BL4 uses **two distinct serial encoding formats**, distinguished by the first token type after the magic header:
 
-| ID | Manufacturer | Code |
-|----|--------------|------|
-| 4 | Daedalus | DAD |
-| 6 | Torgue | TOR |
-| 10 | Tediore | TED |
-| 15 | Order | ORD |
-| 129 | Jakobs | JAK |
-| 134 | Vladof | VLA |
-| 138 | Maliwan | MAL |
+### Format 1: VarBit-First (Compact)
+
+Used by: Type `r` serials, some equipment
+
+```
+@Ugr$ZCm/&tH!t{KgK/Shxu>k
+     ↓
+VarBit(180928) | VarBit(50) | {parts...}
+```
+
+- First token is **VarBit** (prefix `110`)
+- Part Group ID = first_varbit / 8192 (weapons) or / 384 (equipment)
+- Typically shorter serials
+
+### Format 2: VarInt-First (Extended)
+
+Used by: Types `a-g`, `u-z` serials
+
+```
+@Uga`vnFg_4r>@?6{RG/(PsgbBn%/Yct<wUJR00
+     ↓
+VarInt(4), VarInt(0), VarInt(8), VarInt(9) | VarInt(4), VarInt(seed) | | {parts...}
+```
+
+- First token is **VarInt** (prefix `100`)
+- First VarInt encodes **both manufacturer AND weapon type** (see table below)
+- Typically longer serials with more metadata
 
 !!! note
-    IDs for BOR and COV are still being researched. The ID appears to be a hash or index into the manufacturer table.
+    Both formats can appear in the same save file. The game generates different formats depending on item source (drops, quest rewards, vendors, etc.).
+
+---
+
+## First VarInt Weapon Type Mapping
+
+For **VarInt-first format** serials, the first VarInt encodes both manufacturer and weapon type as a combined ID. This mapping was verified by spawning items in-game (Dec 2025):
+
+### Low IDs (0-15) - Pistols, Shotguns, some ARs
+
+| ID | Manufacturer | Weapon Type |
+|----|--------------|-------------|
+| 1 | Daedalus | Shotgun |
+| 2 | Order | Pistol |
+| 3 | Torgue | Shotgun |
+| 4 | Daedalus | Pistol |
+| 5 | Maliwan | Shotgun |
+| 6 | Torgue | Pistol |
+| 7 | Tediore | AR |
+| 9 | Jakobs | Shotgun |
+| 10 | Tediore | Pistol |
+| 11 | Daedalus | AR |
+| 12 | Jakobs | Pistol |
+| 13 | Tediore | Shotgun |
+| 14 | Ripper | Shotgun |
+| 15 | Order | AR |
+
+### High IDs (128+, bit 7 set) - Snipers, SMGs, some ARs
+
+| ID | Manufacturer | Weapon Type |
+|----|--------------|-------------|
+| 128 | Vladof | Sniper |
+| 129 | Jakobs | Sniper |
+| 130 | Daedalus | SMG |
+| 132 | Vladof | AR |
+| 133 | Order | Sniper |
+| 134 | Vladof | SMG |
+| 136 | Torgue | AR |
+| 137 | Maliwan | Sniper |
+| 138 | Maliwan | SMG |
+| 140 | Ripper | SMG |
+| 141 | Jakobs | AR |
+| 142 | Ripper | Sniper |
+
+!!! tip "Verification Method"
+    These mappings were verified by:
+    1. Taking serials from a Chinese weapon database CSV
+    2. Injecting them into save file inventory slots
+    3. Loading the save and confirming the weapon matches the claimed type
 
     *For a complete list of manufacturers and their weapon types, see [Appendix B: Weapon Parts Reference](appendix-b-weapon-parts.md).*
 
@@ -399,29 +465,32 @@ $ bl4 decode --debug '@Ugr$ZCm/&tH!t{KgK/Shxu>k' 2>&1
 
 ## Part Group ID Encoding
 
-The first token in a serial encodes the **Part Group ID**, which determines which part pool to use for decoding Part tokens. Different item categories use different multipliers:
+!!! warning "Format-Specific"
+    This section applies to **VarBit-first format** serials (type `r`, some equipment). For VarInt-first format serials (types `a-g`, `u-z`), use the First VarInt Weapon Type Mapping table above instead.
 
-### Weapons (types r, a-d, f-g, v-z)
+For VarBit-first serials, the first VarBit token encodes the **Part Group ID**, which determines which part pool to use for decoding Part tokens. Different item categories use different multipliers:
+
+### Weapons (type r with VarBit first)
 
 ```
-first_token = group_id * 8192 + offset
-group_id = first_token / 8192
+first_varbit = group_id * 8192 + offset
+group_id = first_varbit / 8192
 ```
 
-**Example:** Serial with first token `180928`:
+**Example:** Serial with first VarBit `180928`:
 - `180928 / 8192 = 22` (remainder 704)
 - Group ID 22 = **Vladof SMG**
 
-### Equipment (type e)
+### Equipment (type e with VarBit first)
 
 ```
-first_token = group_id * 384 + offset
-group_id = first_token / 384
+first_varbit = group_id * 384 + offset
+group_id = first_varbit / 384
 ```
 
-**Example:** Serial with first token `107200`:
-- `107200 / 384 = 279` (remainder 64)
-- Group ID 279 = **Shield (Energy type)**
+**Example:** Serial with first VarBit `37568`:
+- `37568 / 384 = 97` (remainder 320)
+- Group ID 97 = **Gravitar Class Mod**
 
 ### Complete Part Group ID Reference
 
