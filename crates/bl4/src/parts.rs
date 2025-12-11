@@ -110,18 +110,25 @@ pub fn weapon_type_from_first_varint(id: u64) -> Option<&'static str> {
 }
 
 /// Decode level from fourth token (level code)
-/// The fourth token in VarInt-first format encodes level via a lookup table.
-/// Returns None for unknown codes.
+///
+/// For tokens < 128: level = token directly
+/// For tokens >= 128: level = 16 + bits[6:1] + 8*bit0
+///   - bit 7 is always set (indicates high-level encoding)
+///   - bits 1-6 provide base offset from 16
+///   - bit 0 adds 8 if set
+///
+/// Verified in-game Dec 2025.
 pub fn level_from_code(code: u64) -> Option<u8> {
-    match code {
-        3 => Some(2),   // Also seen with level 12 in CSV - needs more research
-        9 => Some(9),
-        128 => Some(16),
-        129 => Some(24),
-        132 => Some(18),
-        138 => Some(21),
-        142 => Some(23),
-        _ => None,
+    if code >= 128 {
+        // High-level encoding: 16 + bits[6:1] + 8*bit0
+        let bits_1_6 = ((code >> 1) & 0x3F) as u8;
+        let bit0 = (code & 1) as u8;
+        Some(16 + bits_1_6 + 8 * bit0)
+    } else if code <= 50 {
+        // Direct encoding for levels 1-50
+        Some(code as u8)
+    } else {
+        None
     }
 }
 

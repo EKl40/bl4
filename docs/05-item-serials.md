@@ -357,20 +357,34 @@ VarInt(4), VarInt(0), VarInt(8), VarInt(9) | VarInt(4), VarInt(seed) | | {parts.
 
 #### Level Encoding
 
-The fourth token encodes item level via a lookup table, NOT a direct value. Known mappings:
+The fourth token encodes item level using a bit-packed formula:
 
-| Fourth Token | Level |
-|--------------|-------|
-| 3 | 2 (or 12?) |
-| 9 | 9 |
-| 128 | 16 |
-| 129 | 24 |
-| 132 | 18 |
-| 138 | 21 |
-| 142 | 23 |
+**For tokens < 128 (levels 1-15):**
+```
+level = token
+```
 
-!!! warning "Incomplete Mapping"
-    This table is incomplete. The fourth token values happen to overlap with weapon IDs (128 = Vladof Sniper, etc.) but they encode levels, not weapons. More research needed to find the complete level encoding table.
+**For tokens >= 128 (levels 16+):**
+```
+level = 16 + bits[6:1] + 8 * bit0
+```
+
+Where:
+- `bit0` = token & 1 (adds 8 if set)
+- `bits[6:1]` = (token >> 1) & 0x3F (6-bit base offset)
+
+**Examples (verified in-game Dec 2025):**
+
+| Token | Binary | Calculation | Level |
+|-------|--------|-------------|-------|
+| 9 | 00001001 | direct | 9 |
+| 128 | 10000000 | 16 + 0 + 0 | 16 |
+| 129 | 10000001 | 16 + 0 + 8 | 24 |
+| 132 | 10000100 | 16 + 2 + 0 | 18 |
+| 138 | 10001010 | 16 + 5 + 0 | 21 |
+| 142 | 10001110 | 16 + 7 + 0 | 23 |
+
+This encoding allows levels 1-15 directly, and levels 16-79 using the high-bit formula.
 
 !!! note
     Both formats can appear in the same save file. The game generates different formats depending on item source (drops, quest rewards, vendors, etc.).
