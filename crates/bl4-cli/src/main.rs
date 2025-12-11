@@ -750,7 +750,10 @@ fn main() -> Result<()> {
                 }
             }
 
-            // Show seed for VarInt-first format (level location still unknown)
+            // Show level and seed for VarInt-first format
+            if let Some(level) = item.level {
+                println!("Level: {}", level);
+            }
             if let Some(seed) = item.seed {
                 println!("Seed: {}", seed);
             }

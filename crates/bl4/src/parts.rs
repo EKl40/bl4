@@ -109,6 +109,22 @@ pub fn weapon_type_from_first_varint(id: u64) -> Option<&'static str> {
     weapon_info_from_first_varint(id).map(|(_, wtype)| wtype)
 }
 
+/// Decode level from fourth token (level code)
+/// The fourth token in VarInt-first format encodes level via a lookup table.
+/// Returns None for unknown codes.
+pub fn level_from_code(code: u64) -> Option<u8> {
+    match code {
+        3 => Some(2),   // Also seen with level 12 in CSV - needs more research
+        9 => Some(9),
+        128 => Some(16),
+        129 => Some(24),
+        132 => Some(18),
+        138 => Some(21),
+        142 => Some(23),
+        _ => None,
+    }
+}
+
 /// Part Group ID (Category) to name mapping
 /// Derived from memory dump analysis and serial decoding
 pub fn category_name(category: i64) -> Option<&'static str> {

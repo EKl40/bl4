@@ -9,7 +9,8 @@
 //! 4. Data is a variable-length bitstream with tokens
 
 use crate::parts::{
-    item_type_name, manufacturer_name, weapon_info_from_first_varint, PartsDatabase,
+    item_type_name, level_from_code, manufacturer_name, weapon_info_from_first_varint,
+    PartsDatabase,
 };
 
 /// Custom Base85 alphabet used by Borderlands 4
@@ -476,7 +477,7 @@ impl ItemSerial {
 
         // Extract common fields from tokens based on format
         let mut manufacturer = None;
-        let level = None; // Level location in serial still unknown
+        let mut level = None;
         let mut seed = None;
 
         // Collect VarInts before first separator for header analysis
@@ -500,14 +501,18 @@ impl ItemSerial {
             }
         }
 
-        // VarInt-first format (types a-d, f-g, u-z): <mfg_id>, 0, 8, <unknown> | 4, <seed> | ...
-        // Fourth token appears to be another weapon ID, NOT level. Level location unknown.
+        // VarInt-first format (types a-d, f-g, u-z): <mfg_id>, 0, 8, <level_code> | 4, <seed> | ...
+        // Fourth token is an encoded level (lookup table, not direct value)
         // VarBit-first format (type r): Different layout
         match item_type {
             'a'..='d' | 'f' | 'g' | 'u'..='z' => {
                 // VarInt-first weapon format
                 if !header_varints.is_empty() {
                     manufacturer = Some(header_varints[0]);
+                }
+                // Fourth token (index 3) is encoded level
+                if header_varints.len() >= 4 {
+                    level = level_from_code(header_varints[3]).map(|l| l as u64);
                 }
                 // After separator: 4, <seed>
                 if after_first_sep.len() >= 2 {

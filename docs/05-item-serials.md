@@ -343,7 +343,7 @@ VarInt(4), VarInt(0), VarInt(8), VarInt(9) | VarInt(4), VarInt(seed) | | {parts.
 | Token 0 | **Weapon ID** | Combined manufacturer + weapon type (see table below) |
 | Token 1 | **Constant** | Always `0` (format marker) |
 | Token 2 | **Constant** | Always `8` (purpose unknown) |
-| Token 3 | **Unknown** | Another weapon ID? Purpose unclear |
+| Token 3 | **Level Code** | Encoded level (see Level Encoding table below) |
 | Separator | `|` | End of header |
 | Token 4 | **Constant** | Always `4` after separator |
 | Token 5 | **Seed** | Random seed (7-260631 range) for stat rolls |
@@ -354,7 +354,23 @@ VarInt(4), VarInt(0), VarInt(8), VarInt(9) | VarInt(4), VarInt(seed) | | {parts.
 - First token is **VarInt** (prefix `100`)
 - First VarInt encodes **both manufacturer AND weapon type** (see table below)
 - Typically longer serials with more metadata
-- **Level location unknown** - not found in decoded token stream
+
+#### Level Encoding
+
+The fourth token encodes item level via a lookup table, NOT a direct value. Known mappings:
+
+| Fourth Token | Level |
+|--------------|-------|
+| 3 | 2 (or 12?) |
+| 9 | 9 |
+| 128 | 16 |
+| 129 | 24 |
+| 132 | 18 |
+| 138 | 21 |
+| 142 | 23 |
+
+!!! warning "Incomplete Mapping"
+    This table is incomplete. The fourth token values happen to overlap with weapon IDs (128 = Vladof Sniper, etc.) but they encode levels, not weapons. More research needed to find the complete level encoding table.
 
 !!! note
     Both formats can appear in the same save file. The game generates different formats depending on item source (drops, quest rewards, vendors, etc.).
