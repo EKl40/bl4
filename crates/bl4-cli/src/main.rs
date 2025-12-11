@@ -730,12 +730,24 @@ fn main() -> Result<()> {
                 item.item_type,
                 item.item_type_description()
             );
-            if let Some(group_id) = item.part_group_id() {
+
+            // Show weapon info based on format type
+            if let Some((mfr, weapon_type)) = item.weapon_info() {
+                // VarInt-first format: first VarInt encodes manufacturer + weapon type
+                println!("Weapon: {} {}", mfr, weapon_type);
+            } else if let Some(group_id) = item.part_group_id() {
+                // VarBit-first format: use Part Group ID
                 let category_name = bl4::category_name(group_id).unwrap_or("Unknown");
                 println!("Category: {} ({})", category_name, group_id);
             }
-            if let Some(mfr) = item.manufacturer_name() {
-                println!("Manufacturer: {}", mfr);
+
+            // Show raw manufacturer ID if we couldn't resolve it
+            if item.weapon_info().is_none() {
+                if let Some(mfr) = item.manufacturer_name() {
+                    println!("Manufacturer: {}", mfr);
+                } else if let Some(mfr_id) = item.manufacturer {
+                    println!("Manufacturer ID: {} (unknown)", mfr_id);
+                }
             }
             println!("Decoded bytes: {}", item.raw_bytes.len());
             println!("Hex: {}", item.hex_dump());

@@ -8,7 +8,9 @@
 //! 3. Decoded bytes have mirrored bits
 //! 4. Data is a variable-length bitstream with tokens
 
-use crate::parts::{item_type_name, manufacturer_name, PartsDatabase};
+use crate::parts::{
+    item_type_name, manufacturer_name, weapon_info_from_first_varint, PartsDatabase,
+};
 
 /// Custom Base85 alphabet used by Borderlands 4
 const BL4_BASE85_ALPHABET: &[u8; 85] =
@@ -604,6 +606,20 @@ impl ItemSerial {
     /// Get manufacturer name if known
     pub fn manufacturer_name(&self) -> Option<&'static str> {
         self.manufacturer.and_then(manufacturer_name)
+    }
+
+    /// Get weapon info (manufacturer, weapon type) for VarInt-first format serials
+    ///
+    /// For weapon types a-d, f-g, u-z, the first VarInt encodes both manufacturer AND weapon type.
+    /// Returns None for VarBit-first format (type r), equipment (type e), or if the ID is unknown.
+    pub fn weapon_info(&self) -> Option<(&'static str, &'static str)> {
+        // Only applies to VarInt-first weapon format (not equipment)
+        match self.item_type {
+            'a'..='d' | 'f' | 'g' | 'u'..='z' => {
+                self.manufacturer.and_then(weapon_info_from_first_varint)
+            }
+            _ => None, // 'e' is equipment, 'r' is VarBit-first
+        }
     }
 
     /// Extract Part Group ID from the serial
