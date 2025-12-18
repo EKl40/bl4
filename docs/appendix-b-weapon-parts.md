@@ -44,6 +44,8 @@ Parts follow this pattern:
 
 ## Weapon Types
 
+### Type Codes
+
 | Code | Type | Description |
 |------|------|-------------|
 | AR | Assault Rifle | Full-auto/burst rifles |
@@ -52,6 +54,21 @@ Parts follow this pattern:
 | SG | Shotgun | Spread weapons |
 | SM | SMG | Submachine guns |
 | SR | Sniper Rifle | Precision weapons |
+
+### EWeaponType Enum
+
+Internal weapon type enumeration (from usmap):
+
+| Value | Type |
+|-------|------|
+| 0 | None |
+| 1 | Pistol |
+| 2 | SMG |
+| 3 | Shotgun |
+| 4 | AssaultRifle |
+| 5 | Sniper |
+| 6 | Heavy |
+| 7 | Count |
 
 ---
 
@@ -366,6 +383,160 @@ Parts follow this pattern:
 | TOR | TOR_HW_Barrel_01 | With Mask |
 | TOR | TOR_HW_Barrel_02 | Splitter variant |
 | VLA | VLA_HW_Barrel_02 | With Mask |
+
+---
+
+## Part Index Organization
+
+### How Indices Are Assigned
+
+Part indices within each category are assigned based on the game's internal registration order, **not alphabetically**. Understanding this is critical for correctly decoding and encoding item serials.
+
+### Registration Order Pattern
+
+Parts appear to be registered in groups by functional type:
+
+| Order | Part Type | Example |
+|-------|-----------|---------|
+| 1 | Unique/special variants | `part_barrel_01_zipgun` |
+| 2 | Body parts | `part_body`, `part_body_a-d` |
+| 3 | Base barrels | `part_barrel_01`, `part_barrel_02` |
+| 4 | Shield/defensive | `part_shield_default`, `part_shield_ricochet` |
+| 5 | Magazines | `part_mag_01`, `part_mag_02` |
+| 6 | Scopes | `part_scope_ironsight`, `part_scope_01_*` |
+| 7 | Grips | `part_grip_01`, `part_grip_02` |
+| 8 | Underbarrel/foregrip | `part_underbarrel_*`, `part_foregrip_*` |
+| 9 | Body magazines | `part_body_mag_smg`, `part_body_mag_ar` |
+| 10 | Barrel variants | `part_barrel_01_a-d`, `part_barrel_02_a-d` |
+| 11 | Licensed parts | `part_barrel_licensed_jak`, `part_barrel_licensed_ted` |
+
+### Index Gaps
+
+Some categories have non-contiguous indices. For example, a category might have parts at indices 1-53, skip 54-56, then continue at 57. These gaps may represent:
+
+- Reserved slots for future DLC parts
+- Parts that were removed during development
+- Internal versioning or compatibility placeholders
+
+### Implications for Modding
+
+When working with item serials:
+
+1. **Never assume alphabetical order** — Part `part_barrel_01` might have index 7, not index 0
+2. **Use runtime-extracted data** — Only memory dumps capture the true `GbxSerialNumberIndex` values
+3. **Validate against known items** — Decode existing item serials to verify index mappings
+4. **Account for gaps** — Don't assume contiguous indices when iterating
+
+---
+
+## Part Selection System
+
+### How Parts Are Chosen for Drops
+
+When the game generates a weapon drop, it uses a multi-layered selection system:
+
+#### 1. Weapon Type Definition
+
+Each weapon type (`InventoryTypeDef`) defines:
+
+| Property | Purpose |
+|----------|---------|
+| `PartTypes` | Array of valid part type IDs for this weapon |
+| `PrefixPartList` | Parts that can generate prefix names |
+| `TitlePartList` | Parts that generate title names |
+| `SuffixPartList` | Parts that generate suffix names |
+| `Rarity` | Reference to rarity definition |
+| `Manufacturer` | Reference to manufacturer definition |
+
+#### 2. Part Type Selection Rules
+
+Parts are grouped by type and selected using `PartTypeSelectionRules`:
+
+```
+PartTypeSelectionRules:
+  PartCount       ← Number of parts to select from this type
+  AdditionalPartChance  ← Probability of bonus parts
+  parts[]         ← Array of PartTypeSelectionPartRule
+```
+
+Each rule entry (`PartTypeSelectionPartRule`) specifies:
+- `part` — Reference to the part definition
+- `bIgnoreMinGameStage` — Whether to bypass level requirements
+
+#### 3. Game Stage (Level) Requirements
+
+Parts can have minimum level requirements via `PartTagGameStageSelectionData`:
+
+```
+mingamestage    ← Minimum player/area level
+MAX             ← Maximum count at this stage
+```
+
+Higher-level parts may only appear on drops from higher-level enemies or areas.
+
+#### 4. Tag-Based Selection
+
+Parts can be filtered by gameplay tags using `PartTagSelectionRules`:
+
+```
+tags            ← Required gameplay tags
+MAX             ← Maximum parts matching these tags
+GameStageRules  ← Level-based rules for tagged parts
+```
+
+#### 5. Rarity-Based Priority
+
+Parts have a `SelectionPriority` (via `InventoryAspect`):
+
+| Priority | Typical Usage |
+|----------|---------------|
+| Default | Common parts |
+| Low | Slightly better parts |
+| Medium | Uncommon parts |
+| High | Rare parts |
+| Ultra | Very rare parts |
+| Legendary | Legendary-only parts |
+
+Higher rarity drops can access higher-priority parts.
+
+#### 6. Random/Weighted Selection
+
+For part variants, `GbxActorPartDef_Random` provides weighted selection:
+
+```
+RandomParts[]   ← Parts with associated weights
+bCanChooseNone  ← Whether "no part" is valid
+WeightForNone   ← Weight for selecting nothing
+```
+
+### Item Pool Preferences
+
+Item pools (`ItemPoolDef`) can bias part selection via `ItemPoolPreferredPartsDef`:
+
+```
+PreferredPartsList[]  ← Parts that should be prioritized
+```
+
+This allows specific drop sources (bosses, quests, etc.) to favor certain parts.
+
+### Practical Example: Weapon Generation Flow
+
+```
+1. Determine weapon type (Pistol, SMG, etc.)
+      ↓
+2. Load InventoryTypeDef for that type + manufacturer
+      ↓
+3. For each PartType in PartTypes[]:
+   a. Get PartTypeSelectionRules
+   b. Filter by mingamestage (player level)
+   c. Filter by tags if applicable
+   d. Apply rarity-based priority filtering
+   e. Select parts using weights
+      ↓
+4. Apply ItemPool preferences if applicable
+      ↓
+5. Assemble final part list → Encode to serial
+```
 
 ---
 

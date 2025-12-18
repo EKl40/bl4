@@ -1,528 +1,332 @@
 # Chapter 2: Unreal Engine Architecture
 
-Borderlands 4 runs on Unreal Engine 5. Understanding UE's architecture is essential for reverse engineering any Unreal game. This chapter covers the core concepts you'll encounter.
+Borderlands 4 runs on Unreal Engine 5, and that's great news for reverse engineering. Every Unreal game—from Fortnite to Elden Ring to indie projects—shares the same fundamental architecture. Learn how Unreal organizes data once, and you've learned something applicable to hundreds of games.
+
+This chapter explores how Unreal thinks about the world. Understanding these patterns transforms mysterious byte sequences into recognizable structures.
 
 ---
 
-## Why Unreal Matters
+## Everything Is a UObject
 
-Every Unreal game shares the same foundational architecture:
-- **UObjects** — The base class for everything
-- **Reflection** — Runtime type information
-- **Pak Files** — Compressed asset archives
-- **Serialization** — How data is saved and loaded
+Unreal Engine has a single base class for nearly everything: `UObject`. Your character? A UObject. That legendary weapon? A UObject. The class definition that describes what a weapon *is*? Also a UObject.
 
-Learn these once, and you can reverse engineer *any* Unreal game.
+This design creates a unified system where the engine can manage, serialize, and inspect anything. Need to save the game state? Iterate through UObjects. Need to find all weapons in the world? Query UObjects by class. Need to know what fields a weapon has? Ask the UObject's class definition.
 
----
-
-## The UObject System
-
-### Everything Is a UObject
-
-In Unreal, virtually every game object inherits from `UObject`:
+The inheritance hierarchy for a Borderlands 4 player character looks like this:
 
 ```
 UObject
-├── AActor (things in the world)
-│   ├── APawn (controllable entities)
-│   │   └── ACharacter (humanoid pawns)
-│   │       └── AOakCharacter (BL4 player/enemy)
-│   └── AWeapon (weapons in BL4)
-├── UStruct (data structures)
-├── UClass (class definitions)
-└── UEnum (enumerations)
+└── AActor (things that exist in the world)
+    └── APawn (things that can be possessed/controlled)
+        └── ACharacter (humanoid pawns with movement)
+            └── AGbxCharacter (Gearbox's base character)
+                └── AOakCharacter (BL4 player/enemy)
 ```
 
-### UObject Memory Layout
-
-Every UObject starts with a standard header:
-
-```cpp
-class UObject {
-    void* VTable;           // +0x00: Virtual function table pointer
-    int32 ObjectFlags;      // +0x08: Object state flags
-    int32 InternalIndex;    // +0x0C: Index in global object array
-    UClass* ClassPrivate;   // +0x10: Pointer to this object's class
-    FName NamePrivate;      // +0x18: Object's name
-    UObject* OuterPrivate;  // +0x20: Parent/container object
-    // ... subclass fields follow
-};
-```
-
-| Offset | Size | Field | Purpose |
-|--------|------|-------|---------|
-| 0x00 | 8 | VTable | Points to virtual function table |
-| 0x08 | 4 | ObjectFlags | RF_* flags (transient, public, etc.) |
-| 0x0C | 4 | InternalIndex | Position in GUObjectArray |
-| 0x10 | 8 | ClassPrivate | Pointer to UClass describing this object |
-| 0x18 | 8 | NamePrivate | FName (index into global name pool) |
-| 0x20 | 8 | OuterPrivate | Owning object (package, actor, etc.) |
-
-!!! note
-    **Total header size**: 0x28 bytes (40 bytes). All UObjects start with this structure, then add their own fields.
+Every step adds capabilities. UObject provides basic memory management and reflection. AActor adds world position and component attachment. APawn adds controller possession. ACharacter adds a skeletal mesh and movement component. By the time you reach AOakCharacter, you have a fully-featured game entity with health, weapons, skills, and AI hooks.
 
 ---
 
-## The FName System
+## The 40-Byte Header
 
-Unreal stores strings efficiently using a global name pool.
-
-### How FNames Work
-
-Instead of storing the string "Damage" everywhere, Unreal stores an *index* into a global table:
+Every UObject begins with the same 40-byte (0x28) header. Recognizing this structure in memory dumps is a core skill.
 
 ```
-FName Structure (8 bytes):
-┌─────────────────────────────┐
-│ ComparisonIndex (4 bytes)   │  ← Index into name pool
-├─────────────────────────────┤
-│ Number (4 bytes)            │  ← Instance number (e.g., "Actor_5")
-└─────────────────────────────┘
+Offset  Size  Field          Purpose
+------  ----  -----          -------
+0x00    8     VTable         Pointer to virtual function table
+0x08    4     ObjectFlags    Flags like RF_Transient, RF_Public
+0x0C    4     InternalIndex  Position in the global object array
+0x10    8     ClassPrivate   Pointer to this object's UClass
+0x18    8     NamePrivate    FName (index into name pool)
+0x20    8     OuterPrivate   Parent object (package, owner)
 ```
 
-### Decoding an FName
+When you see a pointer in memory and want to know if it's a valid UObject, check if the pointer at offset 0x10 (ClassPrivate) points to something reasonable. If that pointer's object also has a sensible structure, you're probably looking at a real UObject.
 
-```rust
-let fname_raw: u64 = 0x0000000000000938;  // From memory
-
-let comparison_index = (fname_raw & 0xFFFFFFFF) as u32;  // = 0x938
-let number = (fname_raw >> 32) as u32;                    // = 0
-
-// Look up in name pool
-let name = gnames.lookup(comparison_index);  // = "Damage"
-
-// If number > 0, append it: "Actor_5"
-```
-
-### The FNamePool (GNames)
-
-The global name pool is a chunked array:
-
-```
-FNamePool
-├── Lock (8 bytes)
-├── CurrentBlock (4 bytes)     ← Number of allocated blocks
-├── CurrentByteCursor (4 bytes)
-└── Blocks[8192]               ← Array of block pointers
-    ├── Block 0 → [ "None", "ByteProperty", "IntProperty", ... ]
-    ├── Block 1 → [ ... more names ... ]
-    └── Block N → [ ... ]
-```
-
-Each block contains FNameEntry structures:
-
-```
-FNameEntry:
-┌─────────────────────────┐
-│ Header (2 bytes)        │  ← Bit 0: IsWide, Bits 6-15: Length
-├─────────────────────────┤
-│ Characters (N bytes)    │  ← ASCII or UTF-16 string data
-└─────────────────────────┘
-```
-
-!!! tip
-    Finding GNames is often the first step in UE reverse engineering. Search memory for the pattern `"None\0ByteProperty"` — these are always the first two names.
+The `InternalIndex` at 0x0C is particularly useful—it tells you where this object lives in Unreal's global tracking array, which we'll explore shortly.
 
 ---
 
-## The Reflection System
+## How Unreal Stores Names
 
-Unreal's reflection system lets the engine inspect classes at runtime.
+Storing the string "Damage" every time a weapon references that property would waste enormous amounts of memory. Instead, Unreal uses a global name pool called `GNames` (or `FNamePool`).
 
-### UClass — Class Definitions
+An `FName` isn't a string—it's an 8-byte value containing an index into this pool:
 
-Every class has a `UClass` object describing it:
-
-```cpp
-class UClass : public UStruct {
-    // ... inherited from UStruct ...
-    UObject* DefaultObject;     // +0x110: CDO (Class Default Object)
-    // ... function pointers, interfaces, etc.
-};
+```
+FName (8 bytes)
+├── Bits 0-31:  ComparisonIndex (which name in the pool)
+└── Bits 32-63: Number (instance suffix, like "Actor_5")
 ```
 
-### UStruct — Structure Layout
+When Unreal needs the actual string, it looks up the index in the name pool. The pool itself is organized as a chunked array—multiple blocks of entries, where each entry stores the actual characters:
 
-`UStruct` describes the layout of a class or struct:
-
-```cpp
-class UStruct : public UField {
-    UStruct* Super;             // +0x40: Parent class
-    UField* Children;           // +0x48: First child field (legacy)
-    FField* ChildProperties;    // +0x50: Property linked list (UE5)
-    int32 PropertiesSize;       // +0x58: Total size of all properties
-    // ...
-};
+```
+FNameEntry
+├── Header (2 bytes): bit 0 = is_wide, bits 6-15 = length
+└── Characters (N bytes): the actual string data
 ```
 
-### FProperty — Property Metadata
-
-Each property (field) in a class has metadata:
-
-```cpp
-class FProperty : public FField {
-    int32 ArrayDim;         // +0x30: Array size (1 for non-arrays)
-    int32 ElementSize;      // +0x34: Size of one element
-    uint64 PropertyFlags;   // +0x38: CPF_* flags
-    int32 Offset_Internal;  // +0x4C: Byte offset in owning struct
-    // ... type-specific data at +0x78
-};
-```
-
-!!! note
-    **Why this matters**: To parse game data, you need to know where each field is. The reflection system tells you "Damage is at offset 0x48, it's an f32."
+The first few names in any Unreal game are always the same: "None" at index 0, then "ByteProperty", "IntProperty", and so on. This predictability helps locate the name pool in memory—search for the byte sequence representing "None\0ByteProperty" and you're close to GNames.
 
 ---
 
-## Global Arrays
+## Reflection: How Unreal Knows Itself
 
-Unreal maintains several global arrays accessible from any thread.
+The reflection system is what makes Unreal games remarkably inspectable. At runtime, Unreal knows the name, type, and offset of every field in every class. This isn't magic—it's data structures describing data structures.
 
-### GUObjectArray
+Every class has a `UClass` object that describes it. UClass inherits from `UStruct`, which contains the property definitions. Each property (`FProperty`) knows its name, its byte offset within the owning struct, its type, and various flags.
 
-All UObjects are tracked in a global array:
+The key fields in UStruct:
 
 ```cpp
-struct FUObjectArray {
-    FChunkedFixedUObjectArray Objects;  // Chunked array of all objects
-};
-
-struct FUObjectItem {
-    UObject* Object;        // +0x00: The actual object
-    int32 Flags;            // +0x08: Item flags
-    int32 ClusterRootIndex; // +0x0C: Clustering info
-    int32 SerialNumber;     // +0x10: For weak references
+class UStruct {
+    UStruct* Super;              // Parent class (offset ~0x40)
+    FField* ChildProperties;     // First property in linked list (offset ~0x50)
+    int32 PropertiesSize;        // Total byte size of all properties
 };
 ```
 
-### GWorld
-
-Pointer to the current world (level):
+And each FProperty in the linked list:
 
 ```cpp
-UWorld* GWorld;  // Global pointer to active world
+class FProperty {
+    FField* Next;                // Next property in chain (offset ~0x18)
+    FName NamePrivate;           // Property name (offset ~0x20)
+    int32 Offset_Internal;       // Byte offset in struct (offset ~0x4C)
+    int32 ElementSize;           // Size of one element
+    // ... type-specific data follows
+};
 ```
 
-### Finding Globals
-
-These globals are accessed via LEA instructions in code:
-
-```asm
-; Common pattern for accessing GNames
-lea rax, [rip + 0x????????]  ; 48 8D 05 XX XX XX XX
-```
-
-BL4-specific offsets (as of Nov 2025):
-
-| Global | Offset from PE Base | Virtual Address |
-|--------|---------------------|-----------------|
-| GUObjectArray | 0x113878f0 | 0x1513878f0 |
-| GNames | 0x112a1c80 | 0x1512a1c80 |
-| GWorld | 0x11532cb8 | 0x151532cb8 |
+To parse a weapon's damage value, you don't hardcode "damage is at offset 0x48." Instead, you find the Weapon class, walk its property chain until you find one named "Damage," read its offset, and use that. This approach survives game patches that shuffle memory layouts.
 
 ---
 
-## Pak Files and Asset Format
+## The Global Object Array
 
-### IoStore Containers
+Unreal tracks all live UObjects in a global array called `GUObjectArray`. This is your index to everything in the game's memory.
 
-BL4 uses UE5's IoStore format:
-
-| File | Purpose |
-|------|---------|
-| `.utoc` | Table of contents (asset index) |
-| `.ucas` | Container archive (compressed data) |
-| `.pak` | Legacy format (some assets) |
-
-### Asset Types
-
-| Extension | Type | Contents |
-|-----------|------|----------|
-| `.uasset` | Asset file | Object definitions, properties |
-| `.uexp` | Export data | Bulk data (textures, meshes) |
-| `.ubulk` | Bulk data | Large data split from uasset |
-
-### Zen Package Format
-
-UE5 uses "Zen" packages internally:
+The array is chunked—multiple blocks of ~65536 entries each. Each entry (`FUObjectItem`) is 24 bytes:
 
 ```
-Zen Package Header:
-├── Summary
-│   ├── Name (FName of this package)
-│   ├── Flags
-│   └── Cooked hash
-├── Name Map (local FNames)
-├── Import Map (external dependencies)
-├── Export Map (objects in this package)
-└── Export Data (serialized object data)
+FUObjectItem (0x18 bytes)
+├── Object pointer (8 bytes): the actual UObject
+├── Flags (4 bytes): item-level flags
+├── ClusterRootIndex (4 bytes): clustering info
+└── SerialNumber (4 bytes): for weak references
 ```
 
-!!! tip
-    Use `retoc` to extract from IoStore containers. These extraction tools are covered in detail in [Chapter 6: Data Extraction](06-data-extraction.md).
+To enumerate all objects of a specific class:
+
+1. Get the chunk pointer from GUObjectArray
+2. Read the element count
+3. For each element, read the Object pointer
+4. Read the object's ClassPrivate pointer
+5. Resolve the class's name via FName lookup
+6. If it matches your target class, you found one
+
+In BL4, with the game running, you might find thousands of objects: hundreds of AWeapon instances, dozens of AOakCharacter instances, and tens of thousands of supporting objects like damage components and inventory slots.
 
 ---
 
-## Usmap Files
+## Pak Files: Where Assets Live
 
-A `.usmap` file contains serialized reflection data — all the class/struct definitions needed to parse assets.
+On disk, Unreal games store assets in `.pak` archives. BL4 uses UE5's IoStore format, which splits the data across multiple files:
 
-### Why You Need Usmap
+**`.utoc` (Table of Contents)**: An index listing every asset, its location, size, and compression info.
 
-UE5 uses "unversioned" serialization — property data is written without field names or types. To parse it, you need the schema:
+**`.ucas` (Container Archive)**: The actual compressed asset data, referenced by the utoc.
 
-```
-Without usmap:  [ 0x42 0x48 0x00 0x00 0x40 0x1C 0x00 0x00 ... ]
-                  ???
+**`.pak` (Legacy Format)**: Some assets still use the older format for compatibility.
 
-With usmap:     Damage (f32) = 50.0
-                Level (u32) = 7200
-                ...
-```
-
-### Usmap Structure
+Inside these archives, individual assets follow the Zen package format:
 
 ```
-Header:
+Zen Package
+├── Summary (package metadata)
+├── Name Map (local FNames used in this package)
+├── Import Map (external assets this package references)
+├── Export Map (objects defined in this package)
+└── Export Data (serialized property data)
+```
+
+The export data contains the actual property values, but here's the catch: UE5 uses "unversioned" serialization. Properties are written without their names or types—just raw values in order. To parse them, you need external schema information.
+
+---
+
+## Usmap: The Rosetta Stone
+
+A `.usmap` file contains the schema needed to parse unversioned assets. It's essentially a dump of the reflection system: all class names, property names, types, and offsets.
+
+Without usmap:
+```
+Raw bytes: 42 48 00 00 40 1C 00 00 ...
+Meaning: ???
+```
+
+With usmap:
+```
+Damage (f32): 50.0
+Level (u32): 7200
+ElementType (enum): Fire
+...
+```
+
+The usmap format is straightforward:
+
+```
+Header
 ├── Magic: 0x30C4
-├── Version: 3 (LargeEnums)
-├── Compression: 0 (None), 1 (Oodle), 2 (Brotli), 3 (ZStd)
-├── CompressedSize
-└── DecompressedSize
-
-Payload:
-├── Names: ["None", "ByteProperty", "Damage", ...]
-├── Enums: [{ name: "EWeaponType", values: [...] }, ...]
-└── Structs: [{ name: "FWeaponData", properties: [...] }, ...]
+├── Version: 3 (most recent)
+├── Compression: 0=None, 1=Oodle, 2=Brotli, 3=ZStd
+├── CompressedSize / DecompressedSize
+└── Payload
+    ├── Names array (all string names)
+    ├── Enums array (enum definitions)
+    └── Structs array (class/struct definitions with properties)
 ```
 
-### Our Generated Usmap
-
-The bl4 project generates a complete usmap from memory dumps (see [Chapter 3: Memory Analysis](03-memory-analysis.md) for how dumps are created):
-
-| Metric | Count |
-|--------|-------|
-| Names | 64,917 |
-| Enums | 2,986 |
-| Structs | 16,849 |
-| Properties | 58,793 |
+The bl4 project generates usmap files from memory dumps. Our current usmap contains 64,917 names, 2,986 enums, and 16,849 struct definitions. This covers essentially every data structure BL4 uses.
 
 ---
 
-## Common UE5 Types
+## Common UE5 Data Types
 
-### TArray — Dynamic Arrays
+Certain types appear everywhere in Unreal. Recognizing them speeds up analysis.
 
-```cpp
-template<typename T>
-struct TArray {
-    T* Data;        // +0x00: Pointer to elements
-    int32 Count;    // +0x08: Number of elements
-    int32 Max;      // +0x0C: Allocated capacity
-};  // Size: 0x10 (16 bytes)
+**TArray<T>** (16 bytes): Dynamic arrays.
+```
+├── Data pointer (8 bytes): heap allocation
+├── Count (4 bytes): current elements
+└── Max (4 bytes): allocated capacity
 ```
 
-### FString — Strings
+**FString** (16 bytes): Dynamic strings (internally a TArray<wchar_t>).
+When serialized: length as i32 (negative means UTF-16), then characters, then null terminator.
 
-```cpp
-struct FString {
-    TArray<wchar_t> Data;  // Wide string data
-};  // Size: 0x10 (16 bytes)
+**FVector** (24 bytes in UE5): 3D coordinates.
+```
+├── X (8 bytes, double)
+├── Y (8 bytes, double)
+└── Z (8 bytes, double)
 ```
 
-Serialized format:
+Note: UE4 used 12-byte vectors with floats. UE5 switched to doubles. This is a common source of parsing errors when adapting UE4 tools.
+
+**FTransform** (96 bytes): Position + rotation + scale.
 ```
-Length (i32, negative = UTF-16, positive = ASCII)
-Characters (abs(Length) bytes or chars)
-Null terminator
-```
-
-### FVector / FRotator
-
-```cpp
-struct FVector {
-    double X, Y, Z;
-};  // Size: 0x18 (24 bytes)
-
-struct FRotator {
-    double Pitch, Yaw, Roll;
-};  // Size: 0x18 (24 bytes)
-```
-
-!!! warning
-    UE5 uses `double` for vectors (24 bytes), not `float` like UE4 (12 bytes). This is a common source of parsing errors.
-
-### FTransform
-
-```cpp
-struct FTransform {
-    FQuat Rotation;     // +0x00 (32 bytes)
-    FVector Translation; // +0x20 (24 bytes + 8 padding)
-    FVector Scale3D;     // +0x40 (24 bytes + 8 padding)
-};  // Size: 0x60 (96 bytes)
+├── Rotation (32 bytes, FQuat)
+├── Translation (32 bytes, FVector + padding)
+└── Scale3D (32 bytes, FVector + padding)
 ```
 
 ---
 
-## BL4-Specific Classes
+## BL4's Class Structure
 
-### AOakCharacter
+The Gearbox-specific classes follow predictable patterns. AOakCharacter, the player/enemy base class, is about 38KB (0x9790 bytes) and contains:
 
-The player/enemy character class:
-
-```cpp
-class AOakCharacter : public AGbxCharacter {
-    // Offset 0x4038
-    FOakDamageState DamageState;       // Size: 0x608
-
-    // Offset 0x4640
-    FOakCharacterHealthState HealthState;  // Size: 0x1E8
-
-    // Offset 0x5F50
-    FOakActiveWeaponsState ActiveWeapons;  // Size: 0x210
-
-    // ... many more fields
-};  // Total size: ~0x9790
+```
+AOakCharacter (inherits AGbxCharacter)
+├── ~0x4038: FOakDamageState (0x608 bytes)
+├── ~0x4640: FOakCharacterHealthState (0x1E8 bytes)
+├── ~0x5F50: FOakActiveWeaponsState (0x210 bytes)
+└── ... hundreds more fields
 ```
 
-### AWeapon
+AWeapon, the weapon class, runs about 3.4KB (0xD48 bytes):
 
-```cpp
-class AWeapon : public AInventory {
-    // Offset 0xC40
-    FDamageModifierData DamageModifierData;  // Size: 0x6C
-
-    // Offset 0xCB8
-    FGbxAttributeFloat ZoomTimeScale;
-
-    // ...
-};  // Size: ~0xD48
 ```
+AWeapon (inherits AInventory)
+├── ~0xC40: FDamageModifierData (0x6C bytes)
+├── ~0xCB8: FGbxAttributeFloat ZoomTimeScale
+└── ... damage calculation fields, fire modes, etc.
+```
+
+These offsets shift between game patches. The reflection system (or a current usmap) is the authoritative source.
 
 ---
 
-## Practical: Finding a Class in Memory
+## Walking Memory: A Preview
 
-!!! note "Preview"
-    This section previews memory analysis techniques that we'll cover more thoroughly in [Chapter 3](03-memory-analysis.md). Don't worry if some concepts aren't clear yet—the goal here is to see how Unreal's architecture appears in practice.
+We'll cover memory analysis properly in Chapter 3, but here's a taste of how Unreal's architecture enables systematic exploration.
 
-Let's trace how to find weapon data in memory:
+To find all weapons in memory:
 
-### Step 1: Find GUObjectArray
+1. Locate GUObjectArray (in BL4: base + 0x113878f0)
+2. Read the chunk pointer and element count
+3. For each object in the array:
+   - Skip if the object pointer is null
+   - Read ClassPrivate at object + 0x10
+   - Read the class's FName at class + 0x18
+   - Resolve the name through GNames
+   - If it's "Weapon" or a subclass, record the address
 
-```bash
-# The global object array contains all UObjects
-# In BL4, it's at offset 0x113878f0 from PE base (0x140000000)
-bl4 memory --dump share/dumps/game.raw read 0x1513878f0 --size 32
-```
+Once you have weapon addresses, use reflection to find properties:
 
-### Step 2: Walk the Array
+1. Read ChildProperties from the UClass
+2. Walk the linked list of FProperty
+3. For each property, read its name and offset
+4. Use those offsets to read actual values from the weapon object
 
-```rust
-// Each chunk holds ~65536 objects
-let chunk_ptr = read_u64(guobjectarray + 0x00);
-let num_elements = read_u32(guobjectarray + 0x08);
-
-// Each FUObjectItem is 24 bytes
-for i in 0..num_elements {
-    let item_ptr = chunk_ptr + (i * 24);
-    let object_ptr = read_u64(item_ptr);
-
-    // Read class pointer
-    let class_ptr = read_u64(object_ptr + 0x10);
-    let class_name = resolve_fname(read_u64(class_ptr + 0x18));
-
-    if class_name == "Weapon" {
-        println!("Found weapon at {:#x}", object_ptr);
-    }
-}
-```
-
-### Step 3: Read Object Properties
-
-Once you have an object, use the reflection system to find field offsets:
-
-```rust
-// UClass contains property chain
-let child_props = read_u64(class_ptr + 0x50);  // ChildProperties
-
-// Walk the linked list
-let mut prop = child_props;
-while prop != 0 {
-    let name_idx = read_u32(prop + 0x20);
-    let offset = read_u32(prop + 0x4C);
-
-    println!("{}: offset 0x{:X}", resolve_fname(name_idx), offset);
-
-    prop = read_u64(prop + 0x18);  // Next property
-}
-```
+This two-phase approach—find objects, then decode them—works for any Unreal game.
 
 ---
 
 ## Exercises
 
-### Exercise 1: UObject Header
+**Exercise 1: Decode a UObject Header**
 
-Given this memory dump of a UObject:
+Given this memory dump:
 ```
 00000000: 50 3A 4F 14 01 00 00 00  00 00 00 02 38 04 00 00
 00000010: E0 51 8B 90 01 00 00 00  38 09 00 00 00 00 00 00
 00000020: 80 25 6E 91 01 00 00 00
 ```
 
-1. What's the VTable pointer?
-2. What's the InternalIndex?
-3. What's the FName comparison index?
+What is:
+1. The VTable pointer?
+2. The InternalIndex?
+3. The FName comparison index?
+
+**Exercise 2: Trace a Class Hierarchy**
+
+Starting from an AOakCharacter object:
+1. Read ClassPrivate (offset 0x10) to get the UClass
+2. Read Super (offset ~0x40) to get the parent class
+3. Continue until Super is null
+
+What classes would you encounter?
 
 <details>
 <summary>Answers</summary>
 
-1. VTable: `0x00000001144F3A50` (bytes 0-7, little-endian)
-2. InternalIndex: `0x00000438` (bytes 12-15) = 1080
-3. FName index: `0x00000938` (bytes 24-27) = 2360
+**Exercise 1:**
+1. VTable: 0x00000001144F3A50 (bytes 0-7, little-endian)
+2. InternalIndex: 0x00000438 = 1080 (bytes 0x0C-0x0F)
+3. FName index: 0x00000938 = 2360 (bytes 0x18-0x1B, lower 32 bits)
 
-</details>
-
-### Exercise 2: Class Hierarchy
-
-In Unreal, to find a class's parent:
-
-1. Read `ClassPrivate` at object + 0x10
-2. Read `Super` at class + 0x40
-3. Read the `Super`'s name
-
-Describe what you'd find for an `AOakCharacter`.
-
-<details>
-<summary>Answer</summary>
-
+**Exercise 2:**
 ```
 AOakCharacter
-└── Super → AGbxCharacter
-    └── Super → ACharacter
-        └── Super → APawn
-            └── Super → AActor
-                └── Super → UObject
-                    └── Super → nullptr
+└── AGbxCharacter
+    └── ACharacter
+        └── APawn
+            └── AActor
+                └── UObject
+                    └── (Super = null, stop)
 ```
 
 </details>
 
 ---
 
-## Key Takeaways
+## What's Next
 
-1. **UObjects are everywhere** — Learn the 0x28-byte header
-2. **FNames are indices** — Look up strings in the global name pool
-3. **Reflection is your friend** — UClass/UStruct tell you where data lives
-4. **Usmap files decode assets** — Without them, pak data is opaque
+You now understand how Unreal organizes its world—UObjects with reflectable properties, tracked in global arrays, stored in pak files with usmap schemas. This knowledge transforms memory analysis from random exploration into systematic discovery.
 
----
-
-## Next Chapter
-
-Now that you understand Unreal's architecture, let's dive into analyzing game memory directly.
+Next, we'll put these concepts into practice by analyzing live game memory and extracting data directly from a running instance.
 
 **Next: [Chapter 3: Memory Analysis](03-memory-analysis.md)**

@@ -1,36 +1,145 @@
 # Chapter 6: Data Extraction
 
-To build a save editor, we need game data: weapon stats, part definitions, manufacturer info. This chapter covers extracting that data from BL4's pak files.
+A save editor needs game data: weapon stats, part definitions, manufacturer information. You might assume this data lives neatly in game files, waiting to be extracted. The reality is more complicated—and more interesting.
+
+This chapter explores what data we can extract, what we can't, and why. Along the way, we'll document our investigation into authoritative category mappings, including the binary analysis that revealed why some data simply doesn't exist in extractable form.
 
 ---
 
-## Game File Overview
+## The Game File Landscape
 
-BL4's data is stored in Unreal Engine pak files:
+BL4's data lives in Unreal Engine pak files, stored in IoStore format:
 
 ```
 Borderlands 4/OakGame/Content/Paks/
 ├── pakchunk0-Windows_0_P.utoc    ← Main game assets
-├── pakchunk0-Windows_0_P.ucas
+├── pakchunk0-Windows_0_P.ucas    ← Compressed data
 ├── pakchunk2-Windows_0_P.utoc    ← Audio (Wwise)
-├── pakchunk2-Windows_0_P.ucas
 ├── pakchunk3-Windows_0_P.utoc    ← Localized audio
 ├── global.utoc                   ← Shared engine data
 └── ...
 ```
 
-### File Types
-
-| Extension | Format | Purpose |
-|-----------|--------|---------|
-| `.utoc` | Table of Contents | Asset index for IoStore |
-| `.ucas` | Container Archive | Compressed asset data |
-| `.pak` | Legacy PAK | Some configs/audio |
-| `.uasset` | Extracted Asset | Object definitions |
-| `.uexp` | Export Data | Bulk data (textures, meshes) |
+**IoStore** is UE5's container format, splitting asset indices (`.utoc`) from compressed data (`.ucas`). This differs from older PAK-only formats and requires specialized tools.
 
 !!! note
-    BL4 uses **IoStore** (UE5's new format), not the older PAK-only format. Tools must support both.
+    BL4 uses IoStore (UE5's format), not legacy PAK. Tools like `repak` won't work on `.utoc/.ucas` files. You need `retoc` or similar IoStore-aware extractors.
+
+---
+
+## What We Can Extract
+
+Some game data extracts cleanly from pak files:
+
+**Balance data**: Stat templates and modifiers for weapons, shields, and gear. These define base damage, fire rate, accuracy scales.
+
+**Naming strategies**: How weapons get their prefix names. "Damage → Tortuous" mappings live in extractable assets.
+
+**Body definitions**: Weapon body assets that reference parts and mesh fragments.
+
+**Loot pools**: Drop tables and rarity weights for different sources.
+
+**Gestalt meshes**: Visual mesh fragments that parts reference.
+
+These assets follow Unreal's content structure:
+
+```
+OakGame/Content/
+├── Gear/
+│   ├── Weapons/
+│   │   ├── _Shared/BalanceData/
+│   │   ├── Pistols/JAK/Parts/
+│   │   └── ...
+│   └── Shields/
+├── PlayerCharacters/
+│   ├── DarkSiren/
+│   └── ...
+└── GameData/Loot/
+```
+
+---
+
+## What We Can't Extract
+
+Here's where it gets interesting. The mappings between serial tokens and actual game parts—the heart of what makes serial decoding work—don't exist as extractable pak file assets.
+
+We wanted authoritative category mappings. Serial token `{4}` on a Vladof SMG should mean a specific part, and we wanted the game's own data to tell us which one. So we investigated.
+
+### The Investigation: Binary Analysis
+
+We used Rizin (a radare2 fork) to analyze the Borderlands4.exe binary directly:
+
+```bash
+rz-bin -S Borderlands4.exe
+```
+
+Results:
+- Total size: 715 MB
+- .sdata section: 157 MB (code)
+- .rodata section: 313 MB (read-only data)
+
+We searched for part prefix strings like "DAD_PS.part_" and "VLA_SM.part_barrel". Nothing. The prefixes don't exist as literal strings in the binary.
+
+We searched for category value sequences. Serial decoding uses Part Group IDs like 2, 3, 4, 5, 6, 7 (consecutive integers stored as i64). We found one promising sequence at offset 0x02367554:
+
+```python
+# Found sequence 2,3,4,5,6,7 as consecutive i64 values at 0x02367554
+```
+
+But examining the context revealed it was near crypto code—specifically "Poly1305 for x86_64, CRYPTOGAMS". Those consecutive integers were coincidental, not category definitions.
+
+!!! warning "False Positives"
+    When searching binaries for numeric patterns, verify the context. Small consecutive integers appear in many places: crypto code, lookup tables, version numbers. Always examine surrounding bytes.
+
+### UE5 Metadata: What We Know
+
+From usmap analysis, we confirmed the exact structure linking parts to serials:
+
+```
+GbxSerialNumberIndex (12 bytes)
+├── Category (Int64): Part Group ID
+├── scope (Byte): EGbxSerialNumberIndexScope (Root=1, Sub=2)
+├── status (Byte): EGbxSerialNumberIndexStatus
+└── Index (Int16): Position in category
+```
+
+Every `InventoryPartDef` contains this structure. The `Category` field maps to Part Group IDs (2=Daedalus Pistol, 22=Vladof SMG, etc.). The `Index` field determines which part token decodes to this part.
+
+But here's the problem: we found **zero** `InventoryPartDef` assets in pak files.
+
+```bash
+uextract /path/to/Paks find-by-class InventoryPartDef
+# Result: 0 assets found
+```
+
+### Where Parts Actually Live
+
+Parts aren't stored as individual pak file assets. They're:
+
+1. **Runtime UObjects** — Created when the game initializes
+2. **Code-defined** — Registrations happen in native code
+3. **Embedded in NexusConfigStore** — Gearbox's custom data system
+4. **Index-assigned at runtime** — `GbxSerialNumberIndex` values set during registration
+
+The game's binary contains the logic to create parts, but the category-to-part mappings are computed, not stored as data files. This is why memory dumps are essential—they capture the runtime state after the game has built these structures.
+
+!!! tip "Practical Implication"
+    Don't search pak files for part definitions. Extract part data from memory dumps where the game has already assembled the complete structures.
+
+---
+
+## The Practical Solution: Empirical Validation
+
+Since authoritative mappings aren't extractable, we derive them empirically:
+
+1. Collect serials from real game items
+2. Decode the Part Group ID and part tokens
+3. Record which weapon/part combinations the tokens represent
+4. Validate by injecting serials into saves and checking in-game
+
+This approach produces reliable mappings. When you decode `{4}` on category 22 as a specific Vladof SMG barrel, it's because we verified that serial produces that barrel in-game.
+
+The `part_categories.json` file in the project contains these empirically-derived mappings. They work. They just don't come from a single authoritative game file.
 
 ---
 
@@ -38,42 +147,27 @@ Borderlands 4/OakGame/Content/Paks/
 
 ### retoc — IoStore Extraction
 
-Extracts assets from `.utoc/.ucas` containers.
+The essential tool for BL4's pak format:
 
-**Install**:
 ```bash
 cargo install --git https://github.com/trumank/retoc retoc_cli
-```
 
-**Usage**:
-```bash
-# List assets
+# List assets in a container
 retoc list /path/to/pakchunk0-Windows_0_P.utoc
 
-# Extract all assets (Zen format)
+# Extract all assets
 retoc unpack /path/to/pakchunk0-Windows_0_P.utoc ./output/
-
-# Convert to legacy format (for other tools)
-retoc to-legacy /path/to/Paks/ ./output/ --no-script-objects
 ```
 
 !!! warning
-    For `to-legacy`, point at the **Paks directory**, not a single file. It needs `global.utoc` for ScriptObjects.
+    For converting to legacy format, point at the **Paks directory**, not a single file. The tool needs access to `global.utoc` for ScriptObjects:
+    ```bash
+    retoc to-legacy /path/to/Paks/ ./output/ --no-script-objects
+    ```
 
-### repak — Legacy PAK Files
+### uextract — Project Tool
 
-For older-style PAK files:
-
-```bash
-cargo install repak
-
-repak list /path/to/file.pak
-repak unpack /path/to/file.pak ./output/
-```
-
-### uextract — Our Custom Tool
-
-The bl4 project includes `uextract` for parsing extracted assets:
+The bl4 project's custom extraction tool:
 
 ```bash
 cargo build --release -p uextract
@@ -90,252 +184,57 @@ cargo build --release -p uextract
 
 ---
 
-## Asset Hierarchy
+## The Usmap Requirement
 
-Extracted assets follow Unreal's content structure:
-
-```
-OakGame/Content/
-├── Gear/
-│   ├── Weapons/
-│   │   ├── _Shared/           # Shared weapon data
-│   │   │   ├── BalanceData/   # Stat templates
-│   │   │   └── NamingStrategies/
-│   │   ├── AssaultRifles/
-│   │   ├── Pistols/
-│   │   ├── Shotguns/
-│   │   ├── SMGs/
-│   │   ├── SniperRifles/
-│   │   └── HeavyWeapons/
-│   ├── Shields/
-│   └── GrenadeGadgets/
-├── PlayerCharacters/
-│   ├── DarkSiren/
-│   ├── Paladin/
-│   ├── Gravitar/
-│   └── ExoSoldier/
-└── GameData/
-    └── Loot/                  # Drop pools, rarity tables
-```
-
----
-
-## Understanding .uasset Files
-
-### Zen Package Format (UE5)
-
-UE5 uses "Zen" packages with unversioned serialization:
+UE5 uses "unversioned" serialization. Properties are stored without field names:
 
 ```
-┌─────────────────────────────┐
-│       Package Header        │
-├─────────────────────────────┤
-│        Name Map             │  ← Local FName table
-├─────────────────────────────┤
-│       Import Map            │  ← External dependencies
-├─────────────────────────────┤
-│       Export Map            │  ← Objects in this package
-├─────────────────────────────┤
-│      Export Data            │  ← Serialized properties
-└─────────────────────────────┘
-```
-
-### Unversioned Serialization
-
-Properties are serialized without field names:
-
-```
-Versioned (old):   "Damage" : 50.0, "Level" : 10
+Versioned (old):   "Damage": 50.0, "Level": 10
 Unversioned (new): 0x42480000 0x0000000A
                    └── Just values, no names
 ```
 
-To parse unversioned data, you need a **usmap** file that provides the schema.
+To parse unversioned data, you need a usmap file containing the schema—all class definitions, property names, types, and offsets.
 
-### Fragment Headers
-
-UE5 uses fragment-based serialization:
-
-```
-Fragment: [SkipNum:7][HasZeroes:1][IsLast:1][ValueCount:7]
-
-Meaning: "Skip N properties, then serialize M properties"
-```
-
-This allows sparse serialization (only non-default values stored).
-
----
-
-## The Usmap File
-
-A usmap contains all class/struct definitions needed to parse assets.
-
-### Why You Need It
-
-Without usmap:
-```
-Raw bytes: 00 00 48 42 00 00 00 0A 00 00 80 3F
-Result: ???
-```
-
-With usmap:
-```
-Struct: FWeaponStats
-  +0x00 Damage (f32) = 50.0
-  +0x04 Level (u32) = 10
-  +0x08 Scale (f32) = 1.0
-```
-
-### Generating Usmap
-
-We generate usmap from memory dumps (see [Chapter 3: Memory Analysis](03-memory-analysis.md) for dump creation):
+We generate usmap from memory dumps:
 
 ```bash
-bl4 memory --dump share/dumps/game.raw dump-usmap
+bl4 memory --dump share/dumps/game.dmp dump-usmap
 
-# Output: BL4.usmap
+# Output: mappings.usmap
 # Names: 64917, Enums: 2986, Structs: 16849, Properties: 58793
 ```
 
-### Pre-Generated Usmap
-
-The project includes a pre-generated usmap:
-
-```
-share/manifest/mappings.usmap
-```
-
-Use it with extraction tools:
-
-```bash
-./target/release/uextract /path/to/Paks -o ./output --usmap share/manifest/mappings.usmap
-```
-
-!!! tip "Reference"
-    For a complete tree of the game's file structure, see [Appendix D: Game File Structure](appendix-d-game-files.md).
+The project includes a pre-generated usmap at `share/manifest/mappings.usmap`.
 
 ---
 
-## Key Asset Types
+## Extracting Parts from Memory
 
-### Balance Data
-
-Weapon/gear stat templates:
-
-```
-OakGame/Content/Gear/Weapons/_Shared/BalanceData/
-├── WeaponStats/
-│   └── Struct_Weapon_Barrel_Init.uasset
-├── Rarity/
-│   └── Struct_Weapon_RarityInit.uasset
-└── Elemental/
-    └── Struct_Weapon_Elemental_Init.uasset
-```
-
-### Naming Strategies
-
-How weapons get their prefixes:
-
-```
-OakGame/Content/Gear/Weapons/_Shared/NamingStrategies/
-└── WeaponNamingStruct.uasset
-```
-
-Maps stat types to prefix names:
-- Damage → "Tortuous", "Agonizing"
-- ReloadSpeed → "Frenetic", "Manic"
-- etc.
-
-### Part Data
-
-Individual weapon parts:
-
-```
-OakGame/Content/Gear/Weapons/Pistols/JAK/Parts/
-├── Barrel/
-│   ├── JAK_PS_Barrel_01.uasset
-│   └── JAK_PS_Barrel_02.uasset
-├── Grip/
-└── Scope/
-```
-
-### Loot Pools
-
-Drop tables and rarity weights:
-
-```
-OakGame/Content/GameData/Loot/
-├── ItemPools/
-│   ├── ItemPoolDef_Boss.uasset
-│   └── ItemPoolDef_Legendary.uasset
-└── RarityData/
-```
-
----
-
-## Using bl4-research
-
-The bl4 project includes research tools for organizing extracted data.
-
-### Generate Manifest
-
-```bash
-cargo build --release -p bl4-research
-
-# Generate pak manifest
-bl4-research pak-manifest -e share/manifest/extracted -o share/manifest
-
-# Generate items database
-bl4-research items-db -m share/manifest
-```
-
-### Output Files
-
-```
-share/manifest/
-├── index.json           # Manifest metadata
-├── pak_manifest.json    # 81,097 indexed assets
-├── pak_summary.json     # Statistics
-├── manufacturers.json   # 10 manufacturers
-├── weapons_breakdown.json
-├── items_database.json  # Drop pools, stats
-├── mappings.usmap       # Reflection data
-├── parts_dump.json      # Raw part names from memory
-├── parts_database.json  # 2615 parts with category mappings
-└── ...
-```
-
----
-
-## Extracting Parts Data
-
-Part definitions (InventoryPartDef) are NOT stored in pak files - they're compiled into game code and only accessible at runtime. We extract them from memory dumps.
+Since parts only exist at runtime, memory extraction is the path forward.
 
 ### Step 1: Create Memory Dump
 
-See [Chapter 3: Memory Analysis](03-memory-analysis.md) for creating a memory dump. The dump is stored in `share/dumps/`.
+Follow Chapter 3's instructions to capture game memory while playing.
 
 ### Step 2: Extract Part Names
 
 ```bash
-# Extract all part names from memory dump
-bl4 memory --dump share/dumps/Borderlands4_november_patch.exe dump-parts \
+bl4 memory --dump share/dumps/game.dmp dump-parts \
     -o share/manifest/parts_dump.json
 ```
 
-This scans memory for strings matching the pattern `XXX_YY.part_*` and produces a JSON file grouped by prefix:
+This scans for strings matching `XXX_YY.part_*` patterns:
 
 ```json
 {
   "DAD_AR": [
     "DAD_AR.part_barrel_01",
     "DAD_AR.part_barrel_01_a",
-    "DAD_AR.part_body",
-    ...
+    "DAD_AR.part_body"
   ],
   "VLA_SM": [
-    "VLA_SM.part_barrel_01",
-    ...
+    "VLA_SM.part_barrel_01"
   ]
 }
 ```
@@ -343,78 +242,47 @@ This scans memory for strings matching the pattern `XXX_YY.part_*` and produces 
 ### Step 3: Build Parts Database
 
 ```bash
-# Build database with category/index mappings
-bl4 memory --dump share/dumps/Borderlands4_november_patch.exe build-parts-db \
+bl4 memory --dump share/dumps/game.dmp build-parts-db \
     -i share/manifest/parts_dump.json \
     -o share/manifest/parts_database.json
 ```
 
-This correlates part names with known Part Group IDs:
+The result maps parts to categories and indices:
 
 ```json
 {
-  "version": 1,
   "parts": [
-    {"category": 2, "index": 0, "name": "DAD_PS.part_barrel_01", "group": "Daedalus Pistol"},
-    {"category": 22, "index": 5, "name": "VLA_SM.part_body_a", "group": "Vladof SMG"},
-    ...
+    {"category": 2, "index": 0, "name": "DAD_PS.part_barrel_01"},
+    {"category": 22, "index": 5, "name": "VLA_SM.part_body_a"}
   ],
   "categories": {
     "2": {"count": 74, "name": "Daedalus Pistol"},
-    "22": {"count": 84, "name": "Vladof SMG"},
-    ...
+    "22": {"count": 84, "name": "Vladof SMG"}
   }
 }
 ```
 
-### Using the Parts Database
-
-The core library loads this database at compile time:
-
-```rust
-use bl4::{CategoryPartsDatabase, category_name};
-
-// Load embedded database
-let db = CategoryPartsDatabase::load_embedded();
-println!("Loaded {} parts", db.len());
-
-// Look up part by category and index
-if let Some(part) = db.get(22, 0) {
-    println!("Category 22, Index 0 = {}", part.name);
-}
-
-// Get category name
-assert_eq!(category_name(22), Some("Vladof SMG"));
-```
+!!! important "Index Ordering"
+    Part indices from memory dumps reflect the game's internal registration order—not alphabetical. Parts typically register in this order: unique variants, bodies, barrels, shields, magazines, scopes, grips, licensed parts. Alphabetical sorting produces wrong indices.
 
 ---
 
-## Practical: Extracting Weapon Data
+## Working with Extracted Assets
 
-### Step 1: Extract Assets
+### Asset Structure
 
-```bash
-# Extract everything from main pak
-retoc unpack ~/.steam/steam/steamapps/common/"Borderlands 4"/OakGame/Content/Paks/pakchunk0-Windows_0_P.utoc ./bl4_assets/
+Extracted `.uasset` files follow the Zen package format:
+
+```
+Package
+├── Header
+├── Name Map (local FNames)
+├── Import Map (external dependencies)
+├── Export Map (objects defined here)
+└── Export Data (serialized properties)
 ```
 
-### Step 2: Find Weapon Balance Data
-
-```bash
-find ./bl4_assets -path "*BalanceData*" -name "*.uasset" | head -20
-```
-
-### Step 3: Parse with Usmap
-
-```bash
-./target/release/uextract ./bl4_assets -o ./parsed --usmap share/manifest/mappings.usmap --ifilter "Struct_Weapon"
-```
-
-### Step 4: Examine Output
-
-```bash
-cat ./parsed/Struct_Weapon_Barrel_Init.json
-```
+With usmap, these parse into readable JSON:
 
 ```json
 {
@@ -425,65 +293,29 @@ cat ./parsed/Struct_Weapon_Barrel_Init.json
       "properties": {
         "Damage_Scale": 1.0,
         "FireRate_Scale": 1.0,
-        "Accuracy_Scale": 1.0,
-        ...
+        "Accuracy_Scale": 1.0
       }
     }
   ]
 }
 ```
 
----
-
-## Finding Specific Data
-
-### Search by Asset Name
+### Finding Specific Data
 
 ```bash
-# Find all legendary items
+# Find legendary items
 find ./bl4_assets -name "*legendary*" -type f
 
 # Find manufacturer data
 find ./bl4_assets -iname "*manufacturer*"
 
-# Find class mods
-find ./bl4_assets -path "*ClassMod*"
-```
-
-### Search by Content
-
-```bash
-# Find assets mentioning "Linebacker"
+# Search asset contents
 grep -r "Linebacker" ./bl4_assets --include="*.uasset" -l
-
-# Find specific stat types
-strings ./bl4_assets/**/*.uasset | grep "BaseDamage"
 ```
 
-### Using uextract Filters
+### Stat Patterns
 
-```bash
-# Only extract weapon-related assets
-./target/release/uextract /path/to/Paks --list --ifilter "Weapon"
-
-# Only extract specific manufacturers
-./target/release/uextract /path/to/Paks --list --ifilter "MAL_"  # Maliwan
-./target/release/uextract /path/to/Paks --list --ifilter "JAK_"  # Jakobs
-```
-
----
-
-## Asset Property Patterns
-
-### Stat Properties
-
-Stats follow the pattern: `StatName_ModifierType_Index_GUID`
-
-```
-Damage_Scale_14_4D6E5A8840F57DBD840197B3CB05686D
-CritDamage_Add_50_740BF8EA43AFEE45A6A954B40FD8101E
-FireRate_Value_36_67DA482B483B02CAC87864955A611952
-```
+Stats follow naming conventions: `StatName_ModifierType_Index_GUID`
 
 | Modifier | Meaning |
 |----------|---------|
@@ -492,152 +324,79 @@ FireRate_Value_36_67DA482B483B02CAC87864955A611952
 | `Value` | Absolute override |
 | `Percent` | Percentage bonus |
 
-### Common Stats
-
-| Stat | Description |
-|------|-------------|
-| `Damage` | Base damage per shot |
-| `CritDamage` | Critical hit multiplier |
-| `FireRate` | Shots per second |
-| `ReloadTime` | Reload duration |
-| `MagSize` | Magazine capacity |
-| `Accuracy` | Base accuracy |
-| `ProjectilesPerShot` | Pellets (shotguns) |
-| `StatusChance` | Elemental proc chance |
-
 ---
 
-## Compression: Oodle
+## Oodle Compression
 
-BL4 uses Oodle compression for pak files.
+BL4 uses Oodle compression (RAD Game Tools). The `retoc` tool handles decompression automatically by loading the game's DLL:
 
-### What Is Oodle?
-
-Oodle is a commercial compression library by RAD Game Tools. It's fast and achieves high ratios.
-
-### Using Oodle
-
-The `retoc` tool handles Oodle automatically by loading the library from the game:
-
-```bash
-# Oodle library location
+```
 ~/.steam/steam/steamapps/common/"Borderlands 4"/Engine/Binaries/ThirdParty/Oodle/
 └── oo2core_9_win64.dll
 ```
 
-On Linux/Proton, Wine loads this DLL when retoc runs.
-
 !!! tip
-    If extraction fails with Oodle errors, ensure the game is installed and the DLL path is accessible.
+    If extraction fails with Oodle errors, verify the game is installed and the DLL path is accessible. On Linux, Wine must be able to load the DLL.
 
 ---
 
 ## Building a Data Pipeline
 
-### Automated Extraction Script
+An automated extraction script saves time when the game updates:
 
 ```bash
 #!/bin/bash
-# extract_bl4_data.sh
-
 GAME_DIR="$HOME/.steam/steam/steamapps/common/Borderlands 4"
 OUTPUT_DIR="./bl4_data"
 USMAP="./share/manifest/mappings.usmap"
 
-# Step 1: Extract pak files
-echo "Extracting pak files..."
+# Extract pak files
 retoc unpack "$GAME_DIR/OakGame/Content/Paks/pakchunk0-Windows_0_P.utoc" "$OUTPUT_DIR/raw"
 
-# Step 2: Parse with usmap
-echo "Parsing assets..."
+# Parse with usmap
 ./target/release/uextract "$OUTPUT_DIR/raw" -o "$OUTPUT_DIR/parsed" --usmap "$USMAP"
 
-# Step 3: Generate manifest
-echo "Generating manifest..."
+# Generate manifest
 bl4-research pak-manifest -e "$OUTPUT_DIR/parsed" -o "$OUTPUT_DIR/manifest"
-
-echo "Done! Output in $OUTPUT_DIR"
 ```
 
-### Manifest Structure
+---
 
-The generated manifest contains:
+## Summary: Data Sources
 
-```json
-{
-  "version": "1.2",
-  "source": "BL4 Pak Files + Memory Dump",
-  "files": {
-    "pak_manifest": "pak_manifest.json",
-    "items_database": "items_database.json",
-    "manufacturers": "manufacturers.json"
-  },
-  "mappings": {
-    "names": 64917,
-    "enums": 2986,
-    "structs": 16849,
-    "properties": 58793
-  }
-}
-```
+| Data | Source | Extractable? |
+|------|--------|--------------|
+| Balance/stats | Pak files | Yes |
+| Naming strategies | Pak files | Yes |
+| Loot pools | Pak files | Yes |
+| Body definitions | Pak files | Yes |
+| Part definitions | Memory only | No |
+| Category mappings | Empirical | Derived |
+
+The gap between "what the game knows" and "what we can extract from files" is real. Memory analysis and empirical validation fill that gap.
 
 ---
 
 ## Exercises
 
-### Exercise 1: Find Your Favorite Weapon
+**Exercise 1: Extract and Explore**
 
-1. Extract the main pak
-2. Search for a legendary weapon you know (e.g., "Linebacker")
-3. Find its balance data asset
-4. Examine its base stats
+Extract the main pak file. Find balance data for a weapon type you use. What stats does the base template define?
 
-### Exercise 2: Compare Manufacturers
+**Exercise 2: Search for Part References**
 
-1. Find all assets for two manufacturers (e.g., Jakobs vs Maliwan)
-2. Compare their shared weapon types
-3. Note any obvious stat pattern differences
+Search extracted assets for references to specific parts (like "JAK_PS.part_barrel"). Where do they appear? What references them?
 
-### Exercise 3: Map a Drop Pool
+**Exercise 3: Compare Manufacturers**
 
-1. Find `ItemPoolDef_Boss.uasset` or similar
-2. Extract and parse it
-3. Document what items can drop from bosses
+Extract assets for two manufacturers (Jakobs vs Maliwan). Compare directory structures. What patterns emerge?
 
 ---
 
-## Troubleshooting
+## What's Next
 
-### "Oodle decompression failed"
+We've covered the full data extraction story—what works, what doesn't, and why. The bl4 project wraps all these techniques into command-line tools.
 
-- Ensure game is installed
-- Check that `oo2core_9_win64.dll` exists
-- On Linux, verify Wine can access the path
-
-### "Unknown property type"
-
-- Usmap might be outdated (game patched)
-- Re-generate usmap from fresh memory dump
-
-### "Asset not found"
-
-- Asset might be in different pakchunk
-- Try extracting from all pakchunks
-- Check for DLC content in separate files
-
----
-
-## Key Takeaways
-
-1. **IoStore is UE5's format** — Use retoc, not old pak tools
-2. **Usmap is essential** — Unversioned data needs schema
-3. **Assets follow patterns** — Learn the directory structure
-4. **Automate extraction** — Scripts save time for updates
-
----
-
-## Next Chapter
-
-Now that we have data, let's put it all together with the bl4 command-line tools.
+Next, we'll tour those tools: how to decode serials, edit saves, extract data, and more, all from the command line.
 
 **Next: [Chapter 7: Using bl4 Tools](07-bl4-tools.md)**

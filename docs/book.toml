@@ -1,0 +1,14 @@
+[book]
+title = "Borderlands 4 Reverse Engineering Guide"
+authors = ["monokrome"]
+description = "A comprehensive guide to reverse engineering Borderlands 4"
+src = "."
+language = "en"
+
+[build]
+build-dir = "rendered/mdbook"
+
+[output.html]
+default-theme = "dark"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/monokrome/bl4"

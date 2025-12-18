@@ -1,15 +1,19 @@
 # Chapter 7: Using bl4 Tools
 
-This chapter is your practical reference for using the bl4 command-line tools. Everything we've learned comes together here.
+Everything we've learned—binary decoding, memory analysis, save file encryption, serial parsing—comes together in the bl4 command-line tools. This chapter serves as your practical reference for day-to-day use.
+
+The tools are designed to be composable. Pipe output between commands. Chain operations together. Build your own workflows for tasks we haven't anticipated. The goal is giving you capabilities, not restricting you to pre-defined paths.
 
 ---
 
 ## Building the Tools
 
+Before using the tools, you need to build them from source.
+
 ### Prerequisites
 
 ```bash
-# Install Rust
+# Install Rust (if you haven't already)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 
@@ -18,304 +22,255 @@ git clone https://github.com/monokrome/bl4
 cd bl4
 ```
 
-### Build All Tools
+### Build Everything
 
 ```bash
-# Build everything in release mode
 cargo build --release
 
-# Binaries are in ./target/release/
+# Binaries appear in ./target/release/
 ls -la target/release/bl4*
 ```
 
+!!! tip
+    Use `--release` for significantly faster execution. Debug builds are useful during development but noticeably slower for memory analysis operations.
+
 ### Individual Builds
 
+If you only need specific tools:
+
 ```bash
-# Just the main CLI
-cargo build --release -p bl4-cli
-
-# Just the research tools
-cargo build --release -p bl4-research
-
-# Just uextract
-cargo build --release -p uextract
+cargo build --release -p bl4-cli      # Main CLI
+cargo build --release -p bl4-research # Research tools
+cargo build --release -p uextract     # Asset extraction
 ```
 
 ---
 
-## bl4 — Main CLI
+## bl4 — The Main CLI
 
-The primary tool for working with BL4 data.
+This is your primary interface for most operations.
 
 ### Save File Operations
 
-#### Decrypt a Save
+**Decrypt a save to YAML:**
 
 ```bash
 bl4 decrypt profile.sav --steam-id 76561198012345678
 
-# Output to file
+# Write to specific file
 bl4 decrypt profile.sav --steam-id 76561198012345678 -o profile.yaml
 ```
 
-#### Encrypt a Save
+**Re-encrypt after editing:**
 
 ```bash
 bl4 encrypt profile.yaml --steam-id 76561198012345678 -o profile.sav
 ```
 
-#### Query Save Data
+**Query specific data without full decryption:**
 
 ```bash
 # Get character level
 bl4 query profile.sav "characters[0].level" --steam-id 76561198012345678
 
-# List all items
+# List all item serials
 bl4 query profile.sav "state.inventory.items[*].serial" --steam-id 76561198012345678
 ```
 
+!!! note "Steam ID Required"
+    The encryption key derives from your Steam ID. Using the wrong ID produces garbage output—not an error message. If decryption produces unreadable data, double-check the ID.
+
 ### Item Serial Operations
 
-#### Decode a Serial
+**Decode a serial:**
 
 ```bash
 bl4 decode '@Ugr$ZCm/&tH!t{KgK/Shxu>k'
 ```
 
-Output:
+Output shows item type, manufacturer, raw hex, and parsed tokens:
+
 ```
 Serial: @Ugr$ZCm/&tH!t{KgK/Shxu>k
 Item type: r (Weapon)
-Manufacturer: Unknown (180928)
-Decoded bytes: 18
-Hex: 21 30 C0 42 0C 48 08 32 0C 4E 08 86 74 72 4B 5C 00 8E
+Part Group: 22 (Vladof SMG)
 Tokens: 180928 | 50 | {0:1} 21 {4} , 2 , , 105 102 41
-Named:  Unknown(180928) | 50 | {0:1} 21 {ReloadSpeed} , 2 , , 105 102 41
 ```
 
-#### Verbose Mode
+**Verbose mode** shows raw bytes and bit positions:
 
 ```bash
 bl4 decode --verbose '@Ugr$ZCm/&tH!t{KgK/Shxu>k'
 ```
 
-Shows additional details:
-- Raw decoded bytes
-- Bit positions
-- Token breakdown
-
-#### Debug Mode
+**Debug mode** outputs bit-by-bit parsing decisions to stderr:
 
 ```bash
 bl4 decode --debug '@Ugr$ZCm/&tH!t{KgK/Shxu>k' 2>&1
 ```
 
-Shows bit-by-bit parsing decisions (stderr output).
+!!! tip "Quoting Serials"
+    Serials contain special characters (`$`, `!`, `@`). Always wrap them in single quotes to prevent shell interpretation.
 
 ### Memory Operations
 
-#### Read Memory
+Memory commands require a dump file specified with `--dump`:
+
+**Read raw memory:**
 
 ```bash
-# From dump file
-bl4 memory --dump share/dumps/game.raw read 0x1513878f0 --size 64
+bl4 memory --dump share/dumps/game.dmp read 0x1513878f0 --size 64
 
-# Output format
-bl4 memory --dump share/dumps/game.raw read 0x1513878f0 --size 64 --format hex
-bl4 memory --dump share/dumps/game.raw read 0x1513878f0 --size 64 --format ascii
+# Different output formats
+bl4 memory --dump share/dumps/game.dmp read 0x1513878f0 --size 64 --format hex
+bl4 memory --dump share/dumps/game.dmp read 0x1513878f0 --size 64 --format ascii
 ```
 
-#### Discover Structures
+**Discover Unreal structures:**
 
 ```bash
-# Find GNames pool
-bl4 memory --dump share/dumps/game.raw discover gnames
-
-# Find GUObjectArray
-bl4 memory --dump share/dumps/game.raw discover guobjectarray
+bl4 memory --dump share/dumps/game.dmp discover gnames
+bl4 memory --dump share/dumps/game.dmp discover guobjectarray
 ```
 
-#### Dump Names
+**Generate usmap from memory:**
 
 ```bash
-# Dump all FNames
-bl4 memory --dump share/dumps/game.raw dump-names
-
-# Limit output
-bl4 memory --dump share/dumps/game.raw dump-names --limit 100
-```
-
-#### Generate Usmap
-
-```bash
-bl4 memory --dump share/dumps/game.raw dump-usmap
-
+bl4 memory --dump share/dumps/game.dmp dump-usmap
 # Output: BL4.usmap in current directory
 ```
 
-#### Extract Parts Database
+**Search for strings:**
 
 ```bash
-# Step 1: Extract part names from memory dump
-bl4 memory --dump share/dumps/Borderlands4_november_patch.exe dump-parts \
+bl4 memory --dump share/dumps/game.dmp scan-string "DAD_AR.part_body" \
+    -B 128 -A 128 -l 10
+```
+
+Shows matches with context bytes before (`-B`) and after (`-A`).
+
+**FName operations:**
+
+```bash
+# Look up by index
+bl4 memory --dump share/dumps/game.dmp fname 12345
+
+# Search for names containing pattern
+bl4 memory --dump share/dumps/game.dmp fname-search "Damage"
+```
+
+### Parts Database Extraction
+
+!!! note "Parts Database Preview"
+    This builds the mappings between serial tokens and actual game parts. See Chapter 6 for why this requires memory extraction rather than pak file analysis.
+
+```bash
+# Step 1: Extract part names from memory
+bl4 memory --dump share/dumps/game.dmp dump-parts \
     -o share/manifest/parts_dump.json
 
-# Step 2: Build database with category/index mappings
-bl4 memory --dump share/dumps/Borderlands4_november_patch.exe build-parts-db \
+# Step 2: Build database with category mappings
+bl4 memory --dump share/dumps/game.dmp build-parts-db \
     -i share/manifest/parts_dump.json \
     -o share/manifest/parts_database.json
 ```
 
-Output:
-```
-Extracting part definitions from memory dump...
-Found 2615 unique part names across 110 weapon types
-Written to: share/manifest/parts_dump.json
-
-Building parts database from share/manifest/parts_dump.json...
-Built parts database with 2615 entries across 53 categories
-Written to: share/manifest/parts_database.json
-```
-
-#### Search Memory for Strings
-
-```bash
-# Search for a specific string in memory
-bl4 memory --dump share/dumps/game.raw scan-string "DAD_AR.part_body" \
-    -B 128 -A 128 -l 10
-```
-
-Shows matches with context bytes before (-B) and after (-A).
-
-#### Look Up FName
-
-```bash
-# Look up an FName by index
-bl4 memory --dump share/dumps/game.raw fname 12345
-
-# With debug info
-bl4 memory --dump share/dumps/game.raw fname 12345 --debug
-```
-
-#### Search FName Pool
-
-```bash
-# Search for names in the FName pool
-bl4 memory --dump share/dumps/game.raw fname-search "Damage"
-```
-
 ### Usmap Information
+
+Inspect a usmap file:
 
 ```bash
 bl4 usmap-info share/manifest/mappings.usmap
 ```
 
-Output:
-```
-=== share/manifest/mappings.usmap ===
-Magic: 0x30c4
-Version: 3
-HasVersionInfo: false
-Compression: 0 (None)
-CompressedSize: 2199074 bytes
-DecompressedSize: 2199074 bytes
+Output shows names, enums, structs, and property counts.
 
-Names: 64917
-Enums: 2986
-Enum values: 17291
-Structs: 16849
-Properties: 58793
+**Search for specific structures:**
 
-File size: 2199090 bytes
+```bash
+bl4 usmap-search share/manifest/mappings.usmap "GbxSerialNumberIndex"
 ```
 
 ### Backup Management
 
+**Create backup before editing:**
+
 ```bash
-# Create backup
 bl4 backup profile.sav
+```
 
-# List backups
+**List existing backups:**
+
+```bash
 bl4 backup --list profile.sav
+```
 
-# Restore backup
+**Restore a specific backup:**
+
+```bash
 bl4 restore profile.sav --timestamp 2025-01-15T10:30:00
 ```
+
+!!! important
+    Always backup before editing. The game might reject modified saves, and cloud sync can overwrite your work.
 
 ---
 
 ## bl4-research — Data Extraction
 
-Tools for extracting and organizing game data.
+Research tools for organizing extracted game data.
 
-### Generate Pak Manifest
+**Generate pak manifest:**
 
 ```bash
 bl4-research pak-manifest \
     -e share/manifest/extracted \
     -o share/manifest
+
+# Produces: pak_manifest.json, pak_summary.json
 ```
 
-Produces:
-- `pak_manifest.json` — 81,097 indexed assets
-- `pak_summary.json` — Statistics
-
-### Generate Items Database
+**Generate items database:**
 
 ```bash
 bl4-research items-db -m share/manifest
 ```
 
-Produces:
-- `items_database.json` — Drop pools, stats
-
-### Generate Weapon Breakdown
+**Generate weapons breakdown:**
 
 ```bash
 bl4-research weapons
 ```
 
-Produces:
-- `weapons_breakdown.json` — Counts by type/manufacturer
-
-### Extract Manufacturers
+**Extract manufacturer data:**
 
 ```bash
 bl4-research manufacturers
 ```
 
-Produces:
-- `manufacturers.json` — All 10 manufacturers
-
 ---
 
 ## uextract — Asset Parsing
 
-Custom tool for parsing UE5 assets.
+Custom tool for parsing UE5 assets from pak files.
 
-### List Assets
+**List all assets:**
 
 ```bash
 ./target/release/uextract /path/to/Paks --list
 ```
 
-### Filter Assets
+**Filter by pattern:**
 
 ```bash
-# Case-insensitive filter
+# Case-insensitive
 ./target/release/uextract /path/to/Paks --list --ifilter "weapon"
 
-# Case-sensitive filter
+# Case-sensitive
 ./target/release/uextract /path/to/Paks --list --filter "Struct_Weapon"
 ```
 
-### Extract Assets
-
-```bash
-./target/release/uextract /path/to/Paks -o ./output
-```
-
-### With Usmap
+**Extract with usmap:**
 
 ```bash
 ./target/release/uextract /path/to/Paks \
@@ -327,10 +282,12 @@ Custom tool for parsing UE5 assets.
 
 ## Common Workflows
 
-### Workflow 1: Edit Save File
+### Workflow 1: Edit a Save File
+
+The complete flow from backup through verification:
 
 ```bash
-# 1. Create backup
+# 1. Backup
 bl4 backup ~/.steam/steam/userdata/.../profile.sav
 
 # 2. Decrypt
@@ -338,35 +295,39 @@ bl4 decrypt ~/.steam/steam/userdata/.../profile.sav \
     --steam-id 76561198012345678 \
     -o profile.yaml
 
-# 3. Edit with text editor
-nano profile.yaml
+# 3. Edit
+nano profile.yaml  # or your preferred editor
 
 # 4. Re-encrypt
 bl4 encrypt profile.yaml \
     --steam-id 76561198012345678 \
     -o ~/.steam/steam/userdata/.../profile.sav
 
-# 5. Start game and verify
+# 5. Start game and verify changes took effect
 ```
 
-### Workflow 2: Analyze Item
+### Workflow 2: Analyze an Item
+
+From serial string to understanding what you're looking at:
 
 ```bash
-# 1. Get item serial from save
+# Get serial from save
 bl4 query profile.sav "state.inventory.items[0].serial" \
     --steam-id 76561198012345678
 
-# 2. Decode the serial
+# Decode the serial
 bl4 decode '@Ugr$ZCm/&tH!t{KgK/Shxu>k'
 
-# 3. Look up part meanings in manifest
-cat share/manifest/items_database.json | jq '.items_with_stats'
+# Look up part meanings
+cat share/manifest/parts_database.json | jq '.categories["22"]'
 ```
 
-### Workflow 3: Update Game Data After Patch
+### Workflow 3: Update After Game Patch
+
+When Gearbox releases an update, regenerate your data:
 
 ```bash
-# 1. Create new memory dump while game running
+# 1. New memory dump while game running
 sudo gcore -o bl4_new $(pgrep -f wine64-preloader)
 
 # 2. Generate new usmap
@@ -386,44 +347,138 @@ bl4-research pak-manifest \
 
 ### Workflow 4: Find a Specific Weapon
 
-```bash
-# 1. Search in pak manifest
-cat share/manifest/pak_manifest.json | jq '.[] | select(.path | contains("Linebacker"))'
+Trace from weapon name to game data:
 
-# 2. Extract that specific asset
+```bash
+# Search manifest
+cat share/manifest/pak_manifest.json | \
+    jq '.[] | select(.path | contains("Linebacker"))'
+
+# Extract that asset
 ./target/release/uextract /path/to/Paks \
     -o ./linebacker \
     --ifilter "Linebacker" \
     --usmap share/manifest/mappings.usmap
 
-# 3. Examine the output
+# Examine
 cat ./linebacker/*.json | jq .
 ```
 
 ---
 
-## Quick Reference
+## Environment Variables
 
-### Environment Variables
+Set these to avoid repeating common options:
 
 ```bash
-# Set Steam ID for all commands
+# Add to ~/.bashrc or ~/.zshrc
 export BL4_STEAM_ID=76561198012345678
-
-# Set default dump file
-export BL4_DUMP_FILE=share/dumps/game.raw
+export BL4_DUMP_FILE=share/dumps/game.dmp
 ```
+
+Commands will use these as defaults when corresponding flags aren't provided.
+
+---
+
+## Shell Integration
+
+### Useful Aliases
+
+```bash
+alias bl4d='bl4 decode'
+alias bl4q='bl4 query --steam-id $BL4_STEAM_ID'
+alias bl4m='bl4 memory --dump $BL4_DUMP_FILE'
+```
+
+### Piping and Composition
+
+```bash
+# Decode and extract specific field
+bl4 decode '@Ugr...' | grep "Part Group"
+
+# Count inventory items
+bl4 query profile.sav "state.inventory.items[*]" \
+    --steam-id 76561198012345678 | jq length
+
+# Batch decode serials
+while read serial; do
+    bl4 decode "$serial" 2>/dev/null | head -3
+done < serials.txt
+```
+
+### JSON Processing with jq
+
+```bash
+# Pretty print
+cat share/manifest/manufacturers.json | jq .
+
+# Find specific manufacturer
+cat share/manifest/manufacturers.json | jq '.DAD'
+
+# Count weapons by type
+cat share/manifest/weapons_breakdown.json | jq '.by_type'
+```
+
+---
+
+## Troubleshooting
+
+### "Invalid Steam ID"
+
+**Cause**: Non-numeric characters in Steam ID.
+
+**Solution**: Use only the 17-digit numeric ID (e.g., `76561198012345678`), not your custom URL or display name.
+
+### "Decryption failed"
+
+**Causes**:
+- Wrong Steam ID
+- Corrupted save file
+- Not a BL4 save file
+
+**Solution**: Verify the Steam ID matches the account that created the save. Check the save file path contains your actual Steam ID.
+
+### "Invalid serial"
+
+**Cause**: Copy error—extra whitespace, wrong quote type, partial copy.
+
+**Solution**: Copy the serial exactly, including the `@Ug` prefix. Use single quotes in shell commands.
+
+### "Usmap not found"
+
+**Solution**:
+
+```bash
+# Generate fresh from memory dump
+bl4 memory --dump share/dumps/game.dmp dump-usmap
+
+# Or verify bundled file exists
+ls -la share/manifest/mappings.usmap
+```
+
+### "Memory read failed"
+
+**Causes**:
+- Address outside dump's range
+- Corrupted dump file
+- Wrong dump format
+
+**Solution**: Verify the dump covers the required address range. For Linux core dumps, addresses may need translation from the MDMP-style addresses documented elsewhere.
+
+---
+
+## Quick Reference
 
 ### Common Flags
 
 | Flag | Description |
 |------|-------------|
-| `-o, --output` | Output file/directory |
+| `-o, --output` | Output file or directory |
 | `--steam-id` | Steam ID for encryption |
-| `--dump` | Memory dump file |
+| `--dump` | Memory dump file path |
 | `--usmap` | Usmap schema file |
-| `--verbose` | More output |
-| `--debug` | Debug output (stderr) |
+| `--verbose` | Extended output |
+| `--debug` | Debug info (stderr) |
 | `-h, --help` | Show help |
 
 ### Exit Codes
@@ -439,152 +494,7 @@ export BL4_DUMP_FILE=share/dumps/game.raw
 
 ---
 
-## Troubleshooting
-
-### "Invalid Steam ID"
-
-```
-Error: Could not parse Steam ID
-```
-
-**Solution**: Ensure Steam ID is numeric (e.g., `76561198012345678`)
-
-### "Decryption failed"
-
-```
-Error: AES decryption failed
-```
-
-**Causes**:
-- Wrong Steam ID
-- Corrupted save file
-- Not a BL4 save file
-
-**Solution**: Verify Steam ID matches the account that created the save
-
-### "Invalid serial"
-
-```
-Error: Invalid Base85 character
-```
-
-**Causes**:
-- Copied serial incorrectly
-- Extra whitespace
-- Wrong quote characters
-
-**Solution**: Copy serial exactly, including `@Ug` prefix
-
-### "Usmap not found"
-
-```
-Error: Could not load usmap file
-```
-
-**Solution**:
-```bash
-# Generate from memory dump
-bl4 memory --dump share/dumps/game.raw dump-usmap
-
-# Or use the bundled one
-ls share/manifest/mappings.usmap
-```
-
-### "Memory read failed"
-
-```
-Error: Could not read memory at address 0x...
-```
-
-**Causes**:
-- Address not in dump
-- Dump file corrupted
-- Wrong file format
-
-**Solution**: Verify dump covers the address range needed
-
----
-
-## Tips and Tricks
-
-### Piping Output
-
-```bash
-# Decode and extract specific field
-bl4 decode '@Ugr...' | grep "Manufacturer"
-
-# Query and count items
-bl4 query profile.sav "state.inventory.items[*]" --steam-id ... | jq length
-```
-
-### Batch Processing
-
-```bash
-# Decode all serials from a file
-while read serial; do
-    bl4 decode "$serial" 2>/dev/null | head -3
-done < serials.txt
-```
-
-### JSON Processing
-
-```bash
-# Pretty print manifest
-cat share/manifest/manufacturers.json | jq .
-
-# Find specific manufacturer
-cat share/manifest/manufacturers.json | jq '.DAD'
-
-# Count weapons by type
-cat share/manifest/weapons_breakdown.json | jq '.by_type'
-```
-
-### Creating Aliases
-
-```bash
-# Add to ~/.bashrc
-alias bl4d='bl4 decode'
-alias bl4q='bl4 query --steam-id $BL4_STEAM_ID'
-alias bl4m='bl4 memory --dump share/dumps/game.raw'
-```
-
----
-
-## What's Next?
-
-You now have all the tools to:
-
-1. ✅ Decrypt and edit save files
-2. ✅ Decode item serials
-3. ✅ Analyze game memory
-4. ✅ Extract game data
-5. ✅ Generate and use usmap files
-
-### Future Development
-
-Areas still being worked on:
-
-- **Serial encoding** — Create new items from scratch
-- **WASM bindings** — Browser-based editor
-- **Inventory manipulation API** — High-level item editing
-
-### Completed Features
-
-- ✅ **Parts database** — 2,615 parts extracted from memory with category/index mappings
-- ✅ **Part Group IDs** — All 53 categories mapped (weapons, shields, gadgets, enhancements)
-- ✅ **Memory extraction tools** — `dump-parts` and `build-parts-db` commands
-
-### Contributing
-
-Found something interesting? Want to help?
-
-1. Document your findings in `docs/`
-2. Add test cases for edge cases
-3. Submit PRs to https://github.com/monokrome/bl4
-
----
-
-## Appendix: Complete Command Reference
+## Command Reference
 
 ### bl4
 
@@ -592,16 +502,16 @@ Found something interesting? Want to help?
 bl4 <COMMAND>
 
 Commands:
-  decrypt     Decrypt a save file to YAML
-  encrypt     Encrypt YAML to a save file
-  query       Query save file data
-  decode      Decode an item serial
-  backup      Manage save backups
-  restore     Restore a save backup
-  memory      Memory analysis commands
-  usmap-info  Display usmap file information
+  decrypt      Decrypt a save file to YAML
+  encrypt      Encrypt YAML to a save file
+  query        Query save file data
+  decode       Decode an item serial
+  backup       Create save backup
+  restore      Restore save backup
+  memory       Memory analysis commands
+  usmap-info   Display usmap file information
   usmap-search Search usmap for struct/property names
-  help        Show help
+  help         Show help
 ```
 
 ### bl4 memory
@@ -610,16 +520,16 @@ Commands:
 bl4 memory --dump <FILE> <COMMAND>
 
 Commands:
-  info           Show info about the memory dump
-  discover       Discover UE5 structures (GNames, GUObjectArray)
-  objects        List UObjects by class name
-  dump-usmap     Generate usmap from memory
+  info           Dump file information
+  discover       Find GNames, GUObjectArray
+  objects        List UObjects by class
+  dump-usmap     Generate usmap
   fname          Look up FName by index
-  fname-search   Search FName pool for string
+  fname-search   Search FName pool
   read           Read bytes at address
-  scan-string    Search for string and show context
-  dump-parts     Extract part names (XXX_YY.part_*)
-  build-parts-db Build parts database with category mappings
+  scan-string    Search for string
+  dump-parts     Extract part names
+  build-parts-db Build parts database
   help           Show help
 ```
 
@@ -645,23 +555,39 @@ uextract <PAK_PATH> [OPTIONS]
 Options:
   -o, --output <PATH>   Output directory
   --list                List assets only
-  --filter <PATTERN>    Filter by pattern (case-sensitive)
-  --ifilter <PATTERN>   Filter by pattern (case-insensitive)
-  --usmap <PATH>        Usmap file for property resolution
+  --filter <PATTERN>    Filter (case-sensitive)
+  --ifilter <PATTERN>   Filter (case-insensitive)
+  --usmap <PATH>        Usmap file for parsing
   -h, --help            Show help
 ```
 
 ---
 
-## Further Reading
+## What's Next?
 
-Now that you've mastered the tools, explore the appendices for deep reference material:
+You now have the practical skills to:
 
-- **[Appendix A: SDK Class Layouts](appendix-a-sdk-layouts.md)** — Memory layouts for UObject, AOakCharacter, AWeapon
-- **[Appendix B: Weapon Parts Reference](appendix-b-weapon-parts.md)** — Complete catalog of weapon parts by manufacturer
-- **[Appendix C: Loot System Internals](appendix-c-loot-system.md)** — Drop pools, rarity weights, luck system
-- **[Appendix D: Game File Structure](appendix-d-game-files.md)** — Full asset tree and file organization
-- **[Glossary](glossary.md)** — Terms, definitions, and quick reference tables
+- Decrypt and edit save files
+- Decode item serials
+- Analyze game memory
+- Extract game data
+- Generate and use usmap files
+
+The appendices provide deep reference material for specific areas:
+
+- **[Appendix A: SDK Class Layouts](appendix-a-sdk-layouts.md)** — Memory layouts for key UE5 classes
+- **[Appendix B: Weapon Parts Reference](appendix-b-weapon-parts.md)** — Complete parts catalog by manufacturer
+- **[Appendix C: Loot System Internals](appendix-c-loot-system.md)** — Drop pools and rarity
+- **[Appendix D: Game File Structure](appendix-d-game-files.md)** — Asset organization
+- **[Glossary](glossary.md)** — Terms and quick reference
+
+### Contributing
+
+Found something interesting? Want to help?
+
+1. Document discoveries in `docs/`
+2. Add test cases for edge cases
+3. Submit PRs to https://github.com/monokrome/bl4
 
 ---
 

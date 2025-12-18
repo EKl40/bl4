@@ -1,175 +1,112 @@
 # Chapter 4: Save File Format
 
-BL4 save files contain your character's complete state: inventory, progress, skills, and cosmetics. This chapter covers how they're encrypted, compressed, and structured.
+Your entire Borderlands 4 experience—hundreds of hours, thousands of items, every skill point and completed mission—lives in a handful of files. These saves are encrypted, compressed, and structured in ways that seem designed to keep you out. But once you understand the layers, editing them becomes straightforward.
+
+This chapter peels back those layers. We'll decrypt the encryption, decompress the compression, and find human-readable YAML waiting underneath.
 
 ---
 
-## Save File Locations
+## Finding Your Saves
 
-### Steam (Linux/Proton)
+Save files live in predictable locations. On Linux with Proton, look in your Steam userdata folder:
 
 ```
 ~/.steam/steam/userdata/<steam_id>/2144700/remote/
-├── profile.sav          # Main profile
-├── <character_id>.sav   # Per-character saves
+├── profile.sav          # Your main profile
+├── <character_id>.sav   # Individual character saves
 └── ...
 ```
 
-### Steam (Windows)
+On Windows, they're in your local app data or Steam's userdata depending on how you installed the game.
 
-```
-C:\Users\<username>\AppData\Local\<game_folder>\Saved\SaveGames\
-```
-
-Or via Steam Cloud:
-```
-C:\Program Files (x86)\Steam\userdata\<steam_id>\2144700\remote\
-```
-
-!!! tip
-    Steam syncs saves to the cloud. Disable cloud sync while editing to prevent conflicts.
+The game syncs these to Steam Cloud. When editing saves, temporarily disable cloud sync to prevent the game from overwriting your modifications or vice versa.
 
 ---
 
-## File Structure Overview
+## The Three Layers
 
-BL4 saves are layered:
+BL4 saves are an onion. The outer layer is AES-256-ECB encryption. Peel that away, and you find zlib compression. Decompress that, and you reach YAML—the actual save data in a format you can read and edit.
 
 ```
-┌─────────────────────────────┐
-│     Encrypted Container     │  ← AES-256-ECB
-├─────────────────────────────┤
-│     Compressed Data         │  ← zlib
-├─────────────────────────────┤
-│     YAML Document           │  ← Human-readable structure
-└─────────────────────────────┘
+.sav file
+    └── AES-256-ECB encrypted
+        └── zlib compressed
+            └── YAML document
 ```
 
-**Pipeline**:
-- **Save**: YAML → zlib compress → AES encrypt → .sav file
-- **Load**: .sav file → AES decrypt → zlib decompress → YAML
+To edit a save, you reverse this process: decrypt, decompress, edit the YAML, compress, encrypt. The bl4 tools handle the first four steps automatically. Let's understand each layer.
 
 ---
 
 ## The Encryption Layer
 
-### File Header
-
-The first bytes reveal the encryption scheme:
+Open a save file in a hex editor and the first bytes tell you what you're dealing with:
 
 ```
-Offset  Bytes           ASCII
-0x00    41 45 53 2D     AES-
-0x04    32 35 36 2D     256-
-0x08    45 43 42 00     ECB.
-0x0C    00 00 00 00     ....  (padding)
-0x10    00 00 00 00     ....  (padding)
-0x14    00 00 00 00     ....  (padding)
-0x18    A8 DE 07 00     ....  (compressed size, little-endian)
-0x1C    00 00 00 00     ....  (padding)
-0x20    [encrypted payload begins]
+00000000: 41 45 53 2D 32 35 36 2D 45 43 42 00 ...
+          A  E  S  -  2  5  6  -  E  C  B  \0
 ```
 
-| Offset | Size | Field | Description |
-|--------|------|-------|-------------|
-| 0x00 | 12 | Magic | "AES-256-ECB\0" |
-| 0x0C | 12 | Reserved | Zeros/padding |
-| 0x18 | 4 | CompSize | Compressed payload size (LE u32) |
-| 0x1C | 4 | Reserved | Zeros |
-| 0x20 | N | Payload | Encrypted, compressed YAML |
+"AES-256-ECB" in plain ASCII. The game literally labels its encryption scheme. Following that header (32 bytes total) comes the encrypted payload.
 
-### AES-256-ECB Encryption
+AES-256-ECB means:
+- **AES**: Advanced Encryption Standard, the industry standard block cipher
+- **256**: 256-bit key (32 bytes)
+- **ECB**: Electronic Codebook mode, where each 16-byte block is encrypted independently
 
-BL4 uses AES-256 in ECB mode:
-- **Block size**: 16 bytes
-- **Key size**: 32 bytes
-- **Mode**: ECB (each block encrypted independently)
+ECB mode is considered weak for security purposes—identical plaintext blocks produce identical ciphertext blocks, revealing patterns. But for save files, it doesn't matter. The goal isn't Fort Knox security; it's preventing casual tampering. And once you know the key derivation, the encryption is no obstacle at all.
 
-!!! warning
-    **ECB mode is weak** — identical plaintext blocks produce identical ciphertext. This is a design flaw that helps us, but games shouldn't use ECB.
+---
 
-### Key Derivation
+## Key Derivation: Your Steam ID Is the Key
 
-The encryption key is derived from your Steam ID:
+The encryption key is derived from your Steam ID. Not generated randomly, not fetched from a server—just computed from a number you can easily find.
+
+The process:
+
+1. Start with a 32-byte base key (constant for all players)
+2. Take your Steam ID as a 64-bit integer
+3. Convert to 8 bytes, little-endian
+4. XOR those 8 bytes with the first 8 bytes of the base key
+5. Result: your personal 32-byte encryption key
 
 ```rust
-// Base key (constant across all saves)
 const BASE_KEY: [u8; 32] = [
-    0x8E, 0x62, 0xA9, 0x4C, 0x50, 0x60, 0x1A, 0x9D,  // First 8 bytes: XOR target
+    0x8E, 0x62, 0xA9, 0x4C, 0x50, 0x60, 0x1A, 0x9D,  // XOR'd with Steam ID
     0x1C, 0x72, 0xD2, 0xAB, 0x95, 0xFC, 0x10, 0xD0,
     0xD7, 0xA9, 0x26, 0x95, 0x70, 0x56, 0x72, 0x7D,
     0xB4, 0x24, 0x2C, 0x77, 0xAD, 0xF2, 0xB1, 0x51,
 ];
 
-fn derive_key(steam_id: &str) -> [u8; 32] {
-    // Extract only digits from Steam ID
-    let digits: String = steam_id.chars().filter(|c| c.is_ascii_digit()).collect();
-
-    // Parse as u64
-    let steam_id_num: u64 = digits.parse().unwrap();
-
-    // Convert to 8-byte little-endian
-    let steam_bytes = steam_id_num.to_le_bytes();
-
-    // XOR with first 8 bytes of base key
+fn derive_key(steam_id: u64) -> [u8; 32] {
     let mut key = BASE_KEY;
+    let steam_bytes = steam_id.to_le_bytes();
     for i in 0..8 {
         key[i] ^= steam_bytes[i];
     }
-
     key
 }
 ```
 
-**Example**:
-```
-Steam ID:    76561198012345678
-As u64:      76561198012345678
-LE bytes:    [0x4E, 0xF3, 0x92, 0x7E, 0xEB, 0x42, 0x10, 0x01]
-
-Base key[0..8]:  [0x8E, 0x62, 0xA9, 0x4C, 0x50, 0x60, 0x1A, 0x9D]
-XOR result:      [0xC0, 0x91, 0x3B, 0x32, 0xBB, 0x22, 0x0A, 0x9C]
-
-Final key: [0xC0, 0x91, 0x3B, ... remaining 24 bytes unchanged]
-```
+Your Steam ID is a 17-digit number starting with 7656119. You can find it in your Steam profile URL, in the save file path, or in memory while the game runs. The bl4 tools require this ID to decrypt your saves.
 
 ---
 
 ## The Compression Layer
 
-After decryption, data is zlib-compressed.
+Decrypt the payload and you'll find bytes starting with `78 9C`—the signature of zlib compression with default settings.
 
-### Zlib Header
+Zlib is straightforward. Every programming language has libraries for it. Decompress, and you get raw YAML text.
 
-```
-78 9C ...  ← Standard zlib header
-│  │
-│  └── Compression level (9C = default)
-└──── Compression method (78 = deflate)
-```
-
-### Decompression
-
-```rust
-use flate2::read::ZlibDecoder;
-
-fn decompress(data: &[u8]) -> Vec<u8> {
-    let mut decoder = ZlibDecoder::new(data);
-    let mut output = Vec::new();
-    decoder.read_to_end(&mut output).unwrap();
-    output
-}
-```
-
-After decompression, you have readable YAML.
+The compression is effective. A 500KB save might decompress to several megabytes of YAML. All that inventory data, skill trees, mission progress—it compresses well because YAML has lots of repeated structure.
 
 ---
 
 ## The YAML Structure
 
-BL4 saves are YAML documents with a specific schema.
+Underneath everything, BL4 saves are YAML documents. Human-readable, text-based, editable with any text editor. This is where the interesting data lives.
 
-### Top-Level Structure
+The top-level structure:
 
 ```yaml
 version: 1
@@ -181,7 +118,7 @@ characters:
   - id: "char_001"
     class: "DarkSiren"
     level: 50
-    ...
+    experience: 4500000
 
 state:
   inventory:
@@ -190,130 +127,47 @@ state:
         flags: 0
       - serial: "@Uge8jxm/)@{!gQaYMipv(G&-b*Z~_"
         flags: 1
-    ...
+  currency:
+    cash: 15000000
+    eridium: 500
+  skills:
+    # Skill point allocations
+  missions:
+    # Completed and active missions
 ```
 
-### Key Sections
+The `version` field indicates the save format version. The `profile` section contains account-level data. `characters` lists your characters with their stats. And `state` contains the actual game state—inventory, equipped items, progress, discoveries.
 
-| Section | Contents |
-|---------|----------|
-| `version` | Save format version |
-| `profile` | Account-level data |
-| `characters` | Character list |
-| `state.inventory` | All items (as serials) |
-| `state.equipped` | Currently equipped items |
-| `state.skills` | Skill point allocations |
-| `state.missions` | Mission progress |
-| `state.discoveries` | Map exploration |
-
-### Item Entry
-
-Each item in inventory:
-
-```yaml
-items:
-  - serial: "@Ugr$ZCm/&tH!t{KgK/Shxu>k"
-    flags: 0
-    seen: true
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `serial` | string | Base85-encoded item data |
-| `flags` | u32 | Item state flags (equipped, favorite, etc.) |
-| `seen` | bool | Whether item notification was dismissed |
+Items in inventory appear as serials—those Base85-encoded strings we'll decode in Chapter 5. Each item also has flags (equipped, favorited, etc.) and metadata.
 
 ---
 
-## Using bl4 to Work with Saves
+## Working with Saves
 
-### Decrypt and View
+The bl4 tools make save editing straightforward.
 
+**Decrypt a save to YAML:**
 ```bash
-# Decrypt save to YAML
 bl4 decrypt profile.sav --steam-id 76561198012345678
-
-# Output: profile.yaml (or stdout)
 ```
 
-### Edit and Re-encrypt
+**Edit the YAML** with any text editor. Add items, change currency, modify stats.
 
+**Re-encrypt:**
 ```bash
-# Edit the YAML file
-nano profile.yaml
-
-# Re-encrypt
 bl4 encrypt profile.yaml --steam-id 76561198012345678 -o profile.sav
 ```
 
-### Query Specific Data
-
+**Query specific data** without full decryption:
 ```bash
-# List all items
 bl4 query profile.sav "state.inventory.items[*].serial" --steam-id 76561198012345678
-
-# Get character level
-bl4 query profile.sav "characters[0].level" --steam-id 76561198012345678
 ```
 
 ---
 
-## Backup System
+## Common Edits
 
-The bl4 tool includes smart backup management.
-
-### How It Works
-
-Before modifying a save, bl4:
-1. Computes SHA-256 hash of the file
-2. Checks if a backup with that hash exists
-3. Creates backup only if it's a new version
-
-```bash
-# Create backup before editing
-bl4 backup profile.sav
-
-# List backups
-bl4 backup --list profile.sav
-
-# Restore specific backup
-bl4 restore profile.sav --timestamp 2025-01-15T10:30:00
-```
-
-### Backup Location
-
-```
-~/.config/bl4/backups/
-├── profile.sav/
-│   ├── 2025-01-15T10:30:00_abc123.sav
-│   └── 2025-01-16T14:22:00_def456.sav
-└── character_001.sav/
-    └── ...
-```
-
----
-
-## Common Modifications
-
-### Adding Items
-
-1. Decrypt the save
-2. Add an item entry to `state.inventory.items`
-3. Re-encrypt
-
-```yaml
-items:
-  - serial: "@Ugr$ZCm/&tH!t{KgK/Shxu>k"  # Existing
-    flags: 0
-  - serial: "@UgYOUR_NEW_ITEM_SERIAL"     # New item
-    flags: 0
-```
-
-!!! warning
-    Invalid serials will crash the game or corrupt inventory. Test with expendable saves first.
-
-### Modifying Currency
-
+**Adding currency:**
 ```yaml
 state:
   currency:
@@ -321,62 +175,89 @@ state:
     eridium: 9999
 ```
 
-### Changing Level
-
+**Changing character level:**
 ```yaml
 characters:
   - id: "char_001"
-    level: 72        # Max level
+    level: 72
     experience: 999999999
 ```
 
----
+**Adding items** requires valid serials. You can copy serials from other saves, community databases, or generate them (once you understand the format from Chapter 5):
+```yaml
+state:
+  inventory:
+    items:
+      - serial: "@UgYOUR_ITEM_SERIAL_HERE"
+        flags: 0
+```
 
-## Validation
-
-BL4 performs some validation on load:
-
-| Check | Result of Failure |
-|-------|-------------------|
-| Invalid YAML syntax | Crash / won't load |
-| Unknown fields | Usually ignored |
-| Invalid item serial | Item may not appear |
-| Out-of-range values | Clamped or ignored |
-| Wrong Steam ID key | Decryption fails completely |
-
-### Testing Modifications
-
-1. **Backup first** — Always
-2. **Make one change** — Isolate what broke if it fails
-3. **Start the game** — Check if character loads
-4. **Verify in-game** — Confirm changes took effect
+Invalid serials cause problems—items may not appear, or worse, the game might crash. Always test with a backup.
 
 ---
 
-## Practical: Decrypting a Save
+## The Backup System
 
-Let's walk through manual decryption:
-
-### Step 1: Read the Header
+Never edit saves without a backup. The bl4 tools include smart backup management.
 
 ```bash
-xxd -l 32 profile.sav
+# Create a backup before editing
+bl4 backup profile.sav
+
+# List all backups for a file
+bl4 backup --list profile.sav
+
+# Restore a specific backup
+bl4 restore profile.sav --timestamp 2025-01-15T10:30:00
 ```
 
-Output:
-```
-00000000: 4145 532d 3235 362d 4543 4200 0000 0000  AES-256-ECB.....
-00000010: 0000 0000 0000 0000 a8de 0700 0000 0000  ................
-```
+Backups are stored with content hashes, so identical saves don't create duplicate backups. You can accumulate a history of significant states without filling your disk.
 
-Compressed size: `0x0007dea8` = 515,752 bytes
+---
 
-### Step 2: Derive the Key
+## What Can Go Wrong
 
+The game validates saves on load. Here's what happens with various issues:
+
+**Invalid YAML syntax**: The game won't load the save at all. Usually a crash or error message.
+
+**Unknown fields**: Generally ignored. The game skips what it doesn't recognize.
+
+**Invalid item serials**: Items may not appear in inventory, or appear as corrupted/unnamed items.
+
+**Out-of-range values**: Often clamped to valid ranges. Level 9999 might become level 72 (the cap).
+
+**Wrong encryption key**: Decryption fails completely—you get garbage instead of zlib-compressed data.
+
+The safest approach: make one change at a time, test immediately, keep backups.
+
+---
+
+## Manual Decryption Walkthrough
+
+If you want to understand the process without tools, here's a Python walkthrough:
+
+**Step 1: Read and parse the header**
 ```python
-import struct
+with open('profile.sav', 'rb') as f:
+    data = f.read()
 
-STEAM_ID = "76561198012345678"
+# First 12 bytes: "AES-256-ECB\0"
+assert data[:11] == b'AES-256-ECB'
+
+# Bytes 24-28: compressed size (little-endian u32)
+import struct
+compressed_size = struct.unpack('<I', data[24:28])[0]
+print(f"Compressed size: {compressed_size}")
+
+# Encrypted payload starts at byte 32
+encrypted = data[32:]
+```
+
+**Step 2: Derive the key**
+```python
+STEAM_ID = 76561198012345678  # Replace with yours
+
 BASE_KEY = bytes([
     0x8E, 0x62, 0xA9, 0x4C, 0x50, 0x60, 0x1A, 0x9D,
     0x1C, 0x72, 0xD2, 0xAB, 0x95, 0xFC, 0x10, 0xD0,
@@ -384,112 +265,72 @@ BASE_KEY = bytes([
     0xB4, 0x24, 0x2C, 0x77, 0xAD, 0xF2, 0xB1, 0x51,
 ])
 
-digits = ''.join(c for c in STEAM_ID if c.isdigit())
-steam_bytes = struct.pack('<Q', int(digits))
-
+steam_bytes = struct.pack('<Q', STEAM_ID)
 key = bytearray(BASE_KEY)
 for i in range(8):
     key[i] ^= steam_bytes[i]
-
-print("Key:", key.hex())
 ```
 
-### Step 3: Decrypt
-
+**Step 3: Decrypt**
 ```python
 from Crypto.Cipher import AES
 
-with open('profile.sav', 'rb') as f:
-    data = f.read()
-
-# Skip 32-byte header
-encrypted = data[32:]
-
-# Pad to 16-byte boundary
+# Pad to 16-byte boundary for AES
 padded = encrypted + b'\x00' * (16 - len(encrypted) % 16)
 
 cipher = AES.new(bytes(key), AES.MODE_ECB)
 decrypted = cipher.decrypt(padded)[:len(encrypted)]
 
-print("First bytes:", decrypted[:16].hex())
-# Should start with 78 9c (zlib header)
+# Should start with 78 9C (zlib header)
+print(f"First bytes: {decrypted[:4].hex()}")
 ```
 
-### Step 4: Decompress
-
+**Step 4: Decompress**
 ```python
 import zlib
-
-decompressed = zlib.decompress(decrypted)
-print(decompressed[:500].decode('utf-8'))
-# Should be YAML
+yaml_data = zlib.decompress(decrypted)
+print(yaml_data[:500].decode('utf-8'))
 ```
+
+At this point, you have the raw YAML. Edit it, then reverse the process: compress with zlib, encrypt with AES-256-ECB using the same key, prepend the header.
+
+---
+
+## Why ECB Mode?
+
+Security-conscious readers might wonder why Gearbox chose ECB mode, which cryptographers consider weak. ECB's flaw is that identical plaintext blocks produce identical ciphertext blocks, potentially revealing patterns.
+
+For save files, this doesn't matter much. The files contain compressed data (which looks random), and the threat model is "casual tampering," not nation-state adversaries. ECB is simple to implement, requires no IV management, and works fine for this use case.
+
+More importantly for us, ECB makes analysis easier. You can decrypt blocks independently, which simplifies debugging. It's a reasonable engineering tradeoff.
 
 ---
 
 ## Exercises
 
-### Exercise 1: Find Your Steam ID
+**Exercise 1: Decrypt Your Save**
 
-1. Open your profile.sav
-2. Decrypt it using the bl4 tool
-3. Find your Steam ID in the YAML
-4. Verify it matches your Steam profile
+Use the bl4 tools to decrypt one of your saves. Examine the YAML structure. Find your character level and current cash.
 
-### Exercise 2: Count Your Items
+**Exercise 2: Make a Safe Modification**
 
-1. Decrypt a character save
-2. Navigate to `state.inventory.items`
-3. Count the items
-4. Compare with in-game backpack count
+1. Back up your save
+2. Decrypt to YAML
+3. Add 1000 cash to your total
+4. Re-encrypt
+5. Load the game and verify
+6. Restore the backup
 
-### Exercise 3: Backup and Modify
+**Exercise 3: Find the Item List**
 
-1. Create a backup of your save
-2. Add 1 million cash
-3. Load the game and verify
-4. Restore the backup
+Navigate through the decrypted YAML to `state.inventory.items`. Count your items. Notice that each item is just a serial string and some flags. The serial encodes everything—weapon type, parts, level, stats.
 
 ---
 
-## Security Notes
+## What's Next
 
-### Why ECB is Weak
+You've seen that inventory items are stored as compact serial strings. But what do those strings mean? How does `@Ugr$ZCm/&tH!t{KgK/Shxu>k` encode a complete weapon with manufacturer, parts, level, and random rolls?
 
-ECB encrypts each 16-byte block independently:
-
-```
-Plaintext:   [Block A] [Block B] [Block A]
-Ciphertext:  [Enc(A)]  [Enc(B)]  [Enc(A)]   ← Identical!
-```
-
-This allows:
-- **Pattern detection** — Repeated data creates repeated ciphertext
-- **Block manipulation** — Swap encrypted blocks without knowing the key
-
-### Why This Doesn't Matter (Much)
-
-For save files:
-- You need the Steam ID anyway (it's in the filename path)
-- Local save editing is expected behavior
-- No multiplayer security depends on save integrity
-
-!!! note
-    Gearbox knows about this. It's a reasonable tradeoff for a single-player game with cross-play considerations.
-
----
-
-## Key Takeaways
-
-1. **Saves are YAML** — Human-readable once decrypted
-2. **Encryption key = Steam ID + base key** — Derivation is simple
-3. **Backup before editing** — Always have a way back
-4. **Items are serials** — Chapter 5 covers decoding them
-
----
-
-## Next Chapter
-
-Now let's decode those item serial strings and understand how weapons and gear are represented.
+The next chapter decodes item serials. It's one of the most intricate pieces of the puzzle, and understanding it unlocks the ability to create, modify, or analyze any item in the game.
 
 **Next: [Chapter 5: Item Serials](05-item-serials.md)**
