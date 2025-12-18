@@ -30,8 +30,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          lfs: true  # Fetch LFS files for manifest data
 
       - name: Setup Python
         uses: actions/setup-python@v5

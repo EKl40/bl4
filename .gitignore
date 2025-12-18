@@ -4,13 +4,17 @@ pkg/
 target/
 *.tmp
 
+# Rendered documentation
+/rendered/
+/docs/rendered/
+/docs/quarto/
+/site/
+
 *.lock
 !/Cargo.lock
 
-# BL4 data files (manifests tracked via LFS)
+# BL4 data files (will be distributed via GitHub Releases)
 /share/*
-!/share/manifest
-/share/manifest/extracted/
 
 # Backup files
 *.bak
