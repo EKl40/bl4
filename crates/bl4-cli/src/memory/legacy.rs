@@ -496,6 +496,11 @@ pub struct Bl4Process {
     pub maps: Vec<MemoryRegion>,
 }
 
+// SAFETY: Windows HANDLEs are process-wide and can be safely used from any thread.
+// The ProcessHandle is essentially just an integer identifier on Windows.
+unsafe impl Send for Bl4Process {}
+unsafe impl Sync for Bl4Process {}
+
 impl MemorySource for Bl4Process {
     fn read_bytes(&self, address: usize, size: usize) -> Result<Vec<u8>> {
         let mut buffer = vec![0u8; size];
@@ -5281,6 +5286,13 @@ pub fn extract_parts_from_fname_arrays(source: &dyn MemorySource) -> Result<Vec<
     parts.sort_by_key(|p| (p.category, p.index));
 
     Ok(parts)
+}
+
+/// List all FNames containing ".part_" from the FNamePool (public wrapper for debugging)
+pub fn list_all_part_fnames(source: &dyn MemorySource) -> Result<Vec<String>> {
+    let pool = FNamePool::discover(source)?;
+    let fnames = search_fname_pool_for_parts(source, &pool)?;
+    Ok(fnames.into_iter().map(|(_, name)| name).collect())
 }
 
 /// Search FNamePool for all names containing ".part_"
