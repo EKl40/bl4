@@ -64,12 +64,11 @@ if gh release view "$VERSION" &>/dev/null; then
     fi
 else
     echo ""
-    echo "Creating draft release $VERSION..."
+    echo "Creating release $VERSION..."
     gh release create "$VERSION" \
         "${MANIFEST_FILES[@]}" \
         --title "$VERSION" \
-        --notes "Manifest data for $VERSION. Binaries will be added when tag is pushed." \
-        --draft
+        --notes "Manifest data for $VERSION. Binaries will be added when tag is pushed."
 fi
 
 echo ""
@@ -77,8 +76,7 @@ echo "Release staged: $VERSION"
 echo ""
 echo "Next steps:"
 echo "  1. Review the release: gh release view $VERSION"
-echo "  2. If draft, publish it: gh release edit $VERSION --draft=false"
-echo "  3. Push the tag to trigger build:"
+echo "  2. Push the tag to trigger build:"
 echo "     git tag $VERSION"
 echo "     git push origin $VERSION"
 echo ""
