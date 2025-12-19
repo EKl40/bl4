@@ -173,7 +173,11 @@ enum Commands {
         pak_manifest: PathBuf,
 
         /// Output file for extracted manufacturers
-        #[arg(short, long, default_value = "share/manifest/manufacturers_extracted.json")]
+        #[arg(
+            short,
+            long,
+            default_value = "share/manifest/manufacturers_extracted.json"
+        )]
         output: PathBuf,
     },
 
@@ -186,7 +190,11 @@ enum Commands {
         pak_manifest: PathBuf,
 
         /// Output file for extracted weapon types
-        #[arg(short, long, default_value = "share/manifest/weapon_types_extracted.json")]
+        #[arg(
+            short,
+            long,
+            default_value = "share/manifest/weapon_types_extracted.json"
+        )]
         output: PathBuf,
     },
 
@@ -199,7 +207,11 @@ enum Commands {
         pak_manifest: PathBuf,
 
         /// Output file for extracted gear types
-        #[arg(short, long, default_value = "share/manifest/gear_types_extracted.json")]
+        #[arg(
+            short,
+            long,
+            default_value = "share/manifest/gear_types_extracted.json"
+        )]
         output: PathBuf,
     },
 
@@ -440,7 +452,10 @@ fn main() -> Result<()> {
             manifest::generate_reference_manifest(&output)?;
         }
 
-        Commands::ExtractManufacturers { pak_manifest, output } => {
+        Commands::ExtractManufacturers {
+            pak_manifest,
+            output,
+        } => {
             println!("Extracting manufacturer data from {:?}...", pak_manifest);
             let manufacturers = manifest::extract_manufacturer_names_from_pak(&pak_manifest)?;
 
@@ -455,14 +470,22 @@ fn main() -> Result<()> {
             println!("\nSaved to {:?}", output);
         }
 
-        Commands::ExtractWeaponTypes { pak_manifest, output } => {
+        Commands::ExtractWeaponTypes {
+            pak_manifest,
+            output,
+        } => {
             println!("Extracting weapon type data from {:?}...", pak_manifest);
             let weapon_types = manifest::extract_weapon_types_from_pak(&pak_manifest)?;
 
             println!("\nDiscovered {} weapon types:", weapon_types.len());
             for (name, wt) in &weapon_types {
-                println!("  {} ({}) - {} manufacturers: {:?}",
-                    name, wt.code, wt.manufacturers.len(), wt.manufacturers);
+                println!(
+                    "  {} ({}) - {} manufacturers: {:?}",
+                    name,
+                    wt.code,
+                    wt.manufacturers.len(),
+                    wt.manufacturers
+                );
             }
 
             // Write to output file
@@ -471,7 +494,10 @@ fn main() -> Result<()> {
             println!("\nSaved to {:?}", output);
         }
 
-        Commands::ExtractGearTypes { pak_manifest, output } => {
+        Commands::ExtractGearTypes {
+            pak_manifest,
+            output,
+        } => {
             println!("Extracting gear type data from {:?}...", pak_manifest);
             let gear_types = manifest::extract_gear_types_from_pak(&pak_manifest)?;
 
@@ -480,8 +506,12 @@ fn main() -> Result<()> {
                 if gt.manufacturers.is_empty() {
                     println!("  {} (no manufacturers)", name);
                 } else {
-                    println!("  {} - {} manufacturers: {:?}",
-                        name, gt.manufacturers.len(), gt.manufacturers);
+                    println!(
+                        "  {} - {} manufacturers: {:?}",
+                        name,
+                        gt.manufacturers.len(),
+                        gt.manufacturers
+                    );
                 }
                 if !gt.subcategories.is_empty() {
                     println!("    subcategories: {:?}", gt.subcategories);
@@ -494,7 +524,10 @@ fn main() -> Result<()> {
             println!("\nSaved to {:?}", output);
         }
 
-        Commands::ExtractElements { pak_manifest, output } => {
+        Commands::ExtractElements {
+            pak_manifest,
+            output,
+        } => {
             println!("Extracting element types from {:?}...", pak_manifest);
             let elements = manifest::extract_elements_from_pak(&pak_manifest)?;
 
@@ -509,7 +542,10 @@ fn main() -> Result<()> {
             println!("\nSaved to {:?}", output);
         }
 
-        Commands::ExtractRarities { pak_manifest, output } => {
+        Commands::ExtractRarities {
+            pak_manifest,
+            output,
+        } => {
             println!("Extracting rarity tiers from {:?}...", pak_manifest);
             let rarities = manifest::extract_rarities_from_pak(&pak_manifest)?;
 
@@ -524,17 +560,25 @@ fn main() -> Result<()> {
             println!("\nSaved to {:?}", output);
         }
 
-        Commands::ExtractStats { pak_manifest, output } => {
+        Commands::ExtractStats {
+            pak_manifest,
+            output,
+        } => {
             println!("Extracting stat types from {:?}...", pak_manifest);
             let stats = manifest::extract_stats_from_pak(&pak_manifest)?;
 
-            println!("\nDiscovered {} stat types (top 20 by occurrence):", stats.len());
+            println!(
+                "\nDiscovered {} stat types (top 20 by occurrence):",
+                stats.len()
+            );
             for stat in stats.iter().take(20) {
                 if stat.modifier_types.is_empty() {
                     println!("  {} ({} occurrences)", stat.name, stat.occurrences);
                 } else {
-                    println!("  {} [{:?}] ({} occurrences)",
-                        stat.name, stat.modifier_types, stat.occurrences);
+                    println!(
+                        "  {} [{:?}] ({} occurrences)",
+                        stat.name, stat.modifier_types, stat.occurrences
+                    );
                 }
             }
             if stats.len() > 20 {

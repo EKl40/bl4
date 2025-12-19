@@ -53,11 +53,13 @@ pub struct ExtractedManufacturer {
 /// 3. UI logo paths: ui_art_manu_logomark_<fullname>
 ///
 /// Priority is given to high-confidence sources (animation/manufacturer paths).
-pub fn extract_manufacturer_names_from_pak(pak_manifest_path: &Path) -> Result<HashMap<String, ExtractedManufacturer>> {
-    let content = fs::read_to_string(pak_manifest_path)
-        .context("Failed to read pak_manifest.json")?;
-    let manifest: PakManifest = serde_json::from_str(&content)
-        .context("Failed to parse pak_manifest.json")?;
+pub fn extract_manufacturer_names_from_pak(
+    pak_manifest_path: &Path,
+) -> Result<HashMap<String, ExtractedManufacturer>> {
+    let content =
+        fs::read_to_string(pak_manifest_path).context("Failed to read pak_manifest.json")?;
+    let manifest: PakManifest =
+        serde_json::from_str(&content).context("Failed to parse pak_manifest.json")?;
 
     let mut manufacturers: HashMap<String, ExtractedManufacturer> = HashMap::new();
 
@@ -71,9 +73,12 @@ pub fn extract_manufacturer_names_from_pak(pak_manifest_path: &Path) -> Result<H
     let manufacturer_dir_pattern = Regex::new(r"_Manufacturer/([A-Z]{3})/").unwrap();
 
     // Known 3-letter codes that appear in manufacturer paths
-    let potential_codes: std::collections::HashSet<&str> =
-        ["BOR", "DAD", "DPL", "JAK", "MAL", "ORD", "RIP", "TED", "TOR", "VLA", "COV", "GRV"]
-        .iter().copied().collect();
+    let potential_codes: std::collections::HashSet<&str> = [
+        "BOR", "DAD", "DPL", "JAK", "MAL", "ORD", "RIP", "TED", "TOR", "VLA", "COV", "GRV",
+    ]
+    .iter()
+    .copied()
+    .collect();
 
     // First pass: discover code→name mappings from reliable sources
     let mut code_to_name: HashMap<String, (String, String, u8)> = HashMap::new(); // (name, source, priority)
@@ -90,10 +95,17 @@ pub fn extract_manufacturer_names_from_pak(pak_manifest_path: &Path) -> Result<H
             if let Some(code_cap) = code_in_filename.captures(path) {
                 let code = code_cap[1].to_string();
                 if potential_codes.contains(code.as_str()) {
-                    let existing_priority = code_to_name.get(&code).map(|(_, _, p)| *p).unwrap_or(0);
+                    let existing_priority =
+                        code_to_name.get(&code).map(|(_, _, p)| *p).unwrap_or(0);
                     if existing_priority < 10 {
-                        code_to_name.insert(code.clone(),
-                            (folder_name.clone(), format!("WeaponAnimation folder: {}", path), 10));
+                        code_to_name.insert(
+                            code.clone(),
+                            (
+                                folder_name.clone(),
+                                format!("WeaponAnimation folder: {}", path),
+                                10,
+                            ),
+                        );
                     }
                 }
             }
@@ -109,18 +121,32 @@ pub fn extract_manufacturer_names_from_pak(pak_manifest_path: &Path) -> Result<H
                 let filename_lower = filename.to_lowercase();
 
                 let candidate_names = [
-                    ("borg", "Borg"), ("daedalus", "Daedalus"), ("dahl", "Dahl"),
-                    ("jakobs", "Jakobs"), ("maliwan", "Maliwan"), ("order", "Order"),
-                    ("ripper", "Ripper"), ("tediore", "Tediore"), ("torgue", "Torgue"),
-                    ("vladof", "Vladof"), ("gravitar", "Gravitar"),
+                    ("borg", "Borg"),
+                    ("daedalus", "Daedalus"),
+                    ("dahl", "Dahl"),
+                    ("jakobs", "Jakobs"),
+                    ("maliwan", "Maliwan"),
+                    ("order", "Order"),
+                    ("ripper", "Ripper"),
+                    ("tediore", "Tediore"),
+                    ("torgue", "Torgue"),
+                    ("vladof", "Vladof"),
+                    ("gravitar", "Gravitar"),
                 ];
 
                 for (name_lower, name_title) in candidate_names {
                     if filename_lower.contains(name_lower) {
-                        let existing_priority = code_to_name.get(&code).map(|(_, _, p)| *p).unwrap_or(0);
+                        let existing_priority =
+                            code_to_name.get(&code).map(|(_, _, p)| *p).unwrap_or(0);
                         if existing_priority < 9 {
-                            code_to_name.insert(code.clone(),
-                                (name_title.to_string(), format!("_Manufacturer path: {}", path), 9));
+                            code_to_name.insert(
+                                code.clone(),
+                                (
+                                    name_title.to_string(),
+                                    format!("_Manufacturer path: {}", path),
+                                    9,
+                                ),
+                            );
                         }
                         break;
                     }
@@ -130,15 +156,21 @@ pub fn extract_manufacturer_names_from_pak(pak_manifest_path: &Path) -> Result<H
 
         // MEDIUM PRIORITY: UI logo paths (reliable but only for names, not code mapping)
         if path_lower.contains("ui_art_manu") {
-            let ui_logo_pattern = Regex::new(r"ui_art_manu_(?:logomark|logotype|itemcard_logomark|itemcard_logotype)_([a-z]+)").unwrap();
+            let ui_logo_pattern = Regex::new(
+                r"ui_art_manu_(?:logomark|logotype|itemcard_logomark|itemcard_logotype)_([a-z]+)",
+            )
+            .unwrap();
             if let Some(cap) = ui_logo_pattern.captures(&path_lower) {
                 let name = cap[1].to_string();
-                let name_title = name.chars().enumerate()
+                let name_title = name
+                    .chars()
+                    .enumerate()
                     .map(|(i, c)| if i == 0 { c.to_ascii_uppercase() } else { c })
                     .collect::<String>();
 
                 // Store with UI_ prefix - will try to match to codes later
-                code_to_name.entry(format!("UI_{}", name.to_uppercase()))
+                code_to_name
+                    .entry(format!("UI_{}", name.to_uppercase()))
                     .or_insert((name_title, format!("UI logo: {}", path), 5));
             }
         }
@@ -179,9 +211,13 @@ pub fn extract_manufacturer_names_from_pak(pak_manifest_path: &Path) -> Result<H
             }
 
             let mfr = manufacturers.entry(code.clone()).or_insert_with(|| {
-                let (name, source, _) = code_to_name.get(&code)
-                    .cloned()
-                    .unwrap_or_else(|| (code.clone(), "Code only (full name not discovered)".to_string(), 0));
+                let (name, source, _) = code_to_name.get(&code).cloned().unwrap_or_else(|| {
+                    (
+                        code.clone(),
+                        "Code only (full name not discovered)".to_string(),
+                        0,
+                    )
+                });
                 ExtractedManufacturer {
                     code: code.clone(),
                     name,
@@ -200,15 +236,22 @@ pub fn extract_manufacturer_names_from_pak(pak_manifest_path: &Path) -> Result<H
     // Also add manufacturers from the manifest's own list
     for code in &manifest.manufacturers {
         if !manufacturers.contains_key(code) {
-            let (name, source, _) = code_to_name.get(code)
-                .cloned()
-                .unwrap_or_else(|| (code.clone(), "Code only (full name not discovered)".to_string(), 0));
-            manufacturers.insert(code.clone(), ExtractedManufacturer {
-                code: code.clone(),
-                name,
-                name_source: source,
-                paths: Vec::new(),
+            let (name, source, _) = code_to_name.get(code).cloned().unwrap_or_else(|| {
+                (
+                    code.clone(),
+                    "Code only (full name not discovered)".to_string(),
+                    0,
+                )
             });
+            manufacturers.insert(
+                code.clone(),
+                ExtractedManufacturer {
+                    code: code.clone(),
+                    name,
+                    name_source: source,
+                    paths: Vec::new(),
+                },
+            );
         }
     }
 
@@ -234,11 +277,13 @@ pub struct ExtractedWeaponType {
 /// Discovers weapon types and their manufacturers from game paths:
 /// - /Gear/Weapons/<WeaponType>/<ManufacturerCode>/
 /// - /Gear/Gadgets/HeavyWeapons/<ManufacturerCode>/
-pub fn extract_weapon_types_from_pak(pak_manifest_path: &Path) -> Result<HashMap<String, ExtractedWeaponType>> {
-    let content = fs::read_to_string(pak_manifest_path)
-        .context("Failed to read pak_manifest.json")?;
-    let manifest: PakManifest = serde_json::from_str(&content)
-        .context("Failed to parse pak_manifest.json")?;
+pub fn extract_weapon_types_from_pak(
+    pak_manifest_path: &Path,
+) -> Result<HashMap<String, ExtractedWeaponType>> {
+    let content =
+        fs::read_to_string(pak_manifest_path).context("Failed to read pak_manifest.json")?;
+    let manifest: PakManifest =
+        serde_json::from_str(&content).context("Failed to parse pak_manifest.json")?;
 
     let mut weapon_types: HashMap<String, ExtractedWeaponType> = HashMap::new();
 
@@ -255,7 +300,10 @@ pub fn extract_weapon_types_from_pak(pak_manifest_path: &Path) -> Result<HashMap
         ("SMG", "SM"),
         ("Sniper", "SR"),
         ("HeavyWeapons", "HW"),
-    ].iter().cloned().collect();
+    ]
+    .iter()
+    .cloned()
+    .collect();
 
     for item in &manifest.items {
         let path = &item.path;
@@ -266,22 +314,35 @@ pub fn extract_weapon_types_from_pak(pak_manifest_path: &Path) -> Result<HashMap
             let mfr_code = cap[2].to_string();
 
             // Skip internal directories
-            if weapon_type.starts_with('_') || weapon_type == "Materials" || weapon_type == "Textures" || weapon_type == "Systems" || weapon_type == "Uniques" {
+            if weapon_type.starts_with('_')
+                || weapon_type == "Materials"
+                || weapon_type == "Textures"
+                || weapon_type == "Systems"
+                || weapon_type == "Uniques"
+            {
                 continue;
             }
 
-            let code = type_to_code.get(weapon_type.as_str())
+            let code = type_to_code
+                .get(weapon_type.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| weapon_type.chars().take(2).collect::<String>().to_uppercase());
+                .unwrap_or_else(|| {
+                    weapon_type
+                        .chars()
+                        .take(2)
+                        .collect::<String>()
+                        .to_uppercase()
+                });
 
-            let wt = weapon_types.entry(weapon_type.clone()).or_insert_with(|| {
-                ExtractedWeaponType {
-                    internal_name: weapon_type.clone(),
-                    code,
-                    manufacturers: Vec::new(),
-                    example_paths: Vec::new(),
-                }
-            });
+            let wt =
+                weapon_types
+                    .entry(weapon_type.clone())
+                    .or_insert_with(|| ExtractedWeaponType {
+                        internal_name: weapon_type.clone(),
+                        code,
+                        manufacturers: Vec::new(),
+                        example_paths: Vec::new(),
+                    });
 
             if !wt.manufacturers.contains(&mfr_code) {
                 wt.manufacturers.push(mfr_code);
@@ -296,14 +357,14 @@ pub fn extract_weapon_types_from_pak(pak_manifest_path: &Path) -> Result<HashMap
         if let Some(cap) = heavy_weapon_pattern.captures(path) {
             let mfr_code = cap[1].to_string();
 
-            let wt = weapon_types.entry("HeavyWeapons".to_string()).or_insert_with(|| {
-                ExtractedWeaponType {
+            let wt = weapon_types
+                .entry("HeavyWeapons".to_string())
+                .or_insert_with(|| ExtractedWeaponType {
                     internal_name: "HeavyWeapons".to_string(),
                     code: "HW".to_string(),
                     manufacturers: Vec::new(),
                     example_paths: Vec::new(),
-                }
-            });
+                });
 
             if !wt.manufacturers.contains(&mfr_code) {
                 wt.manufacturers.push(mfr_code);
@@ -343,11 +404,13 @@ pub struct ExtractedGearType {
 /// Discovers gear types and their manufacturers from game paths:
 /// - /Gear/<GearType>/Manufacturer/<ManufacturerCode>/
 /// - /Gear/Gadgets/<Subcategory>/<ManufacturerCode>/
-pub fn extract_gear_types_from_pak(pak_manifest_path: &Path) -> Result<HashMap<String, ExtractedGearType>> {
-    let content = fs::read_to_string(pak_manifest_path)
-        .context("Failed to read pak_manifest.json")?;
-    let manifest: PakManifest = serde_json::from_str(&content)
-        .context("Failed to parse pak_manifest.json")?;
+pub fn extract_gear_types_from_pak(
+    pak_manifest_path: &Path,
+) -> Result<HashMap<String, ExtractedGearType>> {
+    let content =
+        fs::read_to_string(pak_manifest_path).context("Failed to read pak_manifest.json")?;
+    let manifest: PakManifest =
+        serde_json::from_str(&content).context("Failed to parse pak_manifest.json")?;
 
     let mut gear_types: HashMap<String, ExtractedGearType> = HashMap::new();
 
@@ -377,14 +440,14 @@ pub fn extract_gear_types_from_pak(pak_manifest_path: &Path) -> Result<HashMap<S
                 gear_type
             };
 
-            let gt = gear_types.entry(gear_type_normalized.clone()).or_insert_with(|| {
-                ExtractedGearType {
+            let gt = gear_types
+                .entry(gear_type_normalized.clone())
+                .or_insert_with(|| ExtractedGearType {
                     internal_name: gear_type_normalized.clone(),
                     manufacturers: Vec::new(),
                     subcategories: Vec::new(),
                     example_paths: Vec::new(),
-                }
-            });
+                });
 
             if !gt.manufacturers.contains(&mfr_code) {
                 gt.manufacturers.push(mfr_code);
@@ -405,14 +468,14 @@ pub fn extract_gear_types_from_pak(pak_manifest_path: &Path) -> Result<HashMap<S
                 continue;
             }
 
-            let gt = gear_types.entry("Gadgets".to_string()).or_insert_with(|| {
-                ExtractedGearType {
+            let gt = gear_types
+                .entry("Gadgets".to_string())
+                .or_insert_with(|| ExtractedGearType {
                     internal_name: "Gadgets".to_string(),
                     manufacturers: Vec::new(),
                     subcategories: Vec::new(),
                     example_paths: Vec::new(),
-                }
-            });
+                });
 
             if !gt.subcategories.contains(&subcategory) {
                 gt.subcategories.push(subcategory);
@@ -432,20 +495,24 @@ pub fn extract_gear_types_from_pak(pak_manifest_path: &Path) -> Result<HashMap<S
             let gear_type = cap[1].to_string();
 
             // Skip already handled types and internal directories
-            if gear_type.starts_with('_') || gear_type == "Weapons" ||
-               gear_type.to_lowercase() == "shields" || gear_type == "GrenadeGadgets" ||
-               gear_type == "Gadgets" || gear_type == "Effects" {
+            if gear_type.starts_with('_')
+                || gear_type == "Weapons"
+                || gear_type.to_lowercase() == "shields"
+                || gear_type == "GrenadeGadgets"
+                || gear_type == "Gadgets"
+                || gear_type == "Effects"
+            {
                 continue;
             }
 
-            let gt = gear_types.entry(gear_type.clone()).or_insert_with(|| {
-                ExtractedGearType {
+            let gt = gear_types
+                .entry(gear_type.clone())
+                .or_insert_with(|| ExtractedGearType {
                     internal_name: gear_type.clone(),
                     manufacturers: Vec::new(),
                     subcategories: Vec::new(),
                     example_paths: Vec::new(),
-                }
-            });
+                });
 
             if gt.example_paths.len() < 3 && !gt.example_paths.contains(&path.clone()) {
                 gt.example_paths.push(path.clone());
@@ -477,17 +544,21 @@ pub struct ExtractedElement {
 /// Discovers element types from game effect/texture paths:
 /// - /Common/Effects/Textures/Elements/<ElementType>/
 /// - /Common/Effects/Materials/Elements/<ElementType>/
-pub fn extract_elements_from_pak(pak_manifest_path: &Path) -> Result<HashMap<String, ExtractedElement>> {
-    let content = fs::read_to_string(pak_manifest_path)
-        .context("Failed to read pak_manifest.json")?;
-    let manifest: PakManifest = serde_json::from_str(&content)
-        .context("Failed to parse pak_manifest.json")?;
+pub fn extract_elements_from_pak(
+    pak_manifest_path: &Path,
+) -> Result<HashMap<String, ExtractedElement>> {
+    let content =
+        fs::read_to_string(pak_manifest_path).context("Failed to read pak_manifest.json")?;
+    let manifest: PakManifest =
+        serde_json::from_str(&content).context("Failed to parse pak_manifest.json")?;
 
     let mut elements: HashMap<String, ExtractedElement> = HashMap::new();
 
     // Pattern to find element types from effect paths
     // e.g., /Common/Effects/Textures/Elements/Fire/
-    let element_pattern = Regex::new(r"/(?:Effects|Materials)/(?:Textures|Materials)?/?Elements/([A-Za-z]+)/").unwrap();
+    let element_pattern =
+        Regex::new(r"/(?:Effects|Materials)/(?:Textures|Materials)?/?Elements/([A-Za-z]+)/")
+            .unwrap();
 
     for item in &manifest.items {
         let path = &item.path;
@@ -500,12 +571,12 @@ pub fn extract_elements_from_pak(pak_manifest_path: &Path) -> Result<HashMap<Str
                 continue;
             }
 
-            let elem = elements.entry(element_name.clone()).or_insert_with(|| {
-                ExtractedElement {
+            let elem = elements
+                .entry(element_name.clone())
+                .or_insert_with(|| ExtractedElement {
                     internal_name: element_name.clone(),
                     example_paths: Vec::new(),
-                }
-            });
+                });
 
             if elem.example_paths.len() < 3 {
                 elem.example_paths.push(path.clone());
@@ -535,10 +606,10 @@ pub struct ExtractedRarity {
 /// Discovers rarity tiers from UI rarity pip assets:
 /// - rarity_pip_01_common, rarity_pip_02_uncommon, etc.
 pub fn extract_rarities_from_pak(pak_manifest_path: &Path) -> Result<Vec<ExtractedRarity>> {
-    let content = fs::read_to_string(pak_manifest_path)
-        .context("Failed to read pak_manifest.json")?;
-    let manifest: PakManifest = serde_json::from_str(&content)
-        .context("Failed to parse pak_manifest.json")?;
+    let content =
+        fs::read_to_string(pak_manifest_path).context("Failed to read pak_manifest.json")?;
+    let manifest: PakManifest =
+        serde_json::from_str(&content).context("Failed to parse pak_manifest.json")?;
 
     let mut rarities: HashMap<u8, ExtractedRarity> = HashMap::new();
 
@@ -559,13 +630,11 @@ pub fn extract_rarities_from_pak(pak_manifest_path: &Path) -> Result<Vec<Extract
             let name = cap[2].to_string();
 
             if tier >= 1 && tier <= 5 {
-                let rarity = rarities.entry(tier).or_insert_with(|| {
-                    ExtractedRarity {
-                        tier,
-                        code: format!("comp_{:02}", tier),
-                        name: name.clone(),
-                        example_paths: Vec::new(),
-                    }
+                let rarity = rarities.entry(tier).or_insert_with(|| ExtractedRarity {
+                    tier,
+                    code: format!("comp_{:02}", tier),
+                    name: name.clone(),
+                    example_paths: Vec::new(),
                 });
 
                 if rarity.example_paths.len() < 3 {
@@ -582,13 +651,11 @@ pub fn extract_rarities_from_pak(pak_manifest_path: &Path) -> Result<Vec<Extract
                 let name = cap[2].to_string();
 
                 if tier >= 1 && tier <= 5 {
-                    let rarity = rarities.entry(tier).or_insert_with(|| {
-                        ExtractedRarity {
-                            tier,
-                            code: format!("comp_{:02}", tier),
-                            name: name.clone(),
-                            example_paths: Vec::new(),
-                        }
+                    let rarity = rarities.entry(tier).or_insert_with(|| ExtractedRarity {
+                        tier,
+                        code: format!("comp_{:02}", tier),
+                        name: name.clone(),
+                        example_paths: Vec::new(),
                     });
 
                     // Update name if we find it from parts (more reliable than UI)
@@ -624,28 +691,56 @@ pub struct ExtractedStat {
 /// - Pattern: StatName_ModifierType_Index_GUID
 /// - e.g., Damage_Scale_44_..., Accuracy_Value_38_...
 pub fn extract_stats_from_pak(pak_manifest_path: &Path) -> Result<Vec<ExtractedStat>> {
-    let content = fs::read_to_string(pak_manifest_path)
-        .context("Failed to read pak_manifest.json")?;
-    let manifest: PakManifest = serde_json::from_str(&content)
-        .context("Failed to parse pak_manifest.json")?;
+    let content =
+        fs::read_to_string(pak_manifest_path).context("Failed to read pak_manifest.json")?;
+    let manifest: PakManifest =
+        serde_json::from_str(&content).context("Failed to parse pak_manifest.json")?;
 
     let mut stats: HashMap<String, (std::collections::HashSet<String>, usize)> = HashMap::new();
 
     // Pattern to find stat properties
     // e.g., Damage_Scale_44_GUID, Accuracy_Value_38_GUID
-    let stat_pattern = Regex::new(r"^([A-Z][a-zA-Z]+)_(Scale|Add|Value|Percent)_\d+_[A-F0-9]{32}$").unwrap();
+    let stat_pattern =
+        Regex::new(r"^([A-Z][a-zA-Z]+)_(Scale|Add|Value|Percent)_\d+_[A-F0-9]{32}$").unwrap();
 
     // Also simpler patterns like StatName_Index_GUID
     let simple_stat_pattern = Regex::new(r"^([A-Z][a-zA-Z]+)_\d+_[A-F0-9]{32}$").unwrap();
 
     // Known stat-like property prefixes to look for
     let stat_prefixes = [
-        "Accuracy", "Damage", "CritDamage", "FireRate", "ReloadTime", "ReloadSpeed",
-        "MagSize", "Spread", "Recoil", "Sway", "Ammo", "AmmoCost", "Capacity",
-        "Cooldown", "Duration", "Healing", "Health", "Impulse", "Projectile",
-        "Radius", "Regen", "Speed", "StatusChance", "StatusDamage", "ElementalPower",
-        "DamageRadius", "EquipTime", "PutDownTime", "ZoomDuration", "AccImpulse",
-        "AccRegen", "AccDelay", "ProjectilesPerShot",
+        "Accuracy",
+        "Damage",
+        "CritDamage",
+        "FireRate",
+        "ReloadTime",
+        "ReloadSpeed",
+        "MagSize",
+        "Spread",
+        "Recoil",
+        "Sway",
+        "Ammo",
+        "AmmoCost",
+        "Capacity",
+        "Cooldown",
+        "Duration",
+        "Healing",
+        "Health",
+        "Impulse",
+        "Projectile",
+        "Radius",
+        "Regen",
+        "Speed",
+        "StatusChance",
+        "StatusDamage",
+        "ElementalPower",
+        "DamageRadius",
+        "EquipTime",
+        "PutDownTime",
+        "ZoomDuration",
+        "AccImpulse",
+        "AccRegen",
+        "AccDelay",
+        "ProjectilesPerShot",
     ];
 
     for item in &manifest.items {
@@ -655,9 +750,9 @@ pub fn extract_stats_from_pak(pak_manifest_path: &Path) -> Result<Vec<ExtractedS
                 let stat_name = cap[1].to_string();
                 let modifier_type = cap[2].to_string();
 
-                let entry = stats.entry(stat_name).or_insert_with(|| {
-                    (std::collections::HashSet::new(), 0)
-                });
+                let entry = stats
+                    .entry(stat_name)
+                    .or_insert_with(|| (std::collections::HashSet::new(), 0));
                 entry.0.insert(modifier_type);
                 entry.1 += 1;
             }
@@ -666,9 +761,9 @@ pub fn extract_stats_from_pak(pak_manifest_path: &Path) -> Result<Vec<ExtractedS
             if let Some(cap) = simple_stat_pattern.captures(prop) {
                 let stat_name = cap[1].to_string();
                 if stat_prefixes.contains(&stat_name.as_str()) {
-                    let entry = stats.entry(stat_name).or_insert_with(|| {
-                        (std::collections::HashSet::new(), 0)
-                    });
+                    let entry = stats
+                        .entry(stat_name)
+                        .or_insert_with(|| (std::collections::HashSet::new(), 0));
                     entry.1 += 1;
                 }
             }
@@ -676,7 +771,8 @@ pub fn extract_stats_from_pak(pak_manifest_path: &Path) -> Result<Vec<ExtractedS
     }
 
     // Convert to sorted vector
-    let mut result: Vec<ExtractedStat> = stats.into_iter()
+    let mut result: Vec<ExtractedStat> = stats
+        .into_iter()
         .map(|(name, (modifiers, count))| {
             let mut modifier_types: Vec<String> = modifiers.into_iter().collect();
             modifier_types.sort();

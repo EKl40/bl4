@@ -181,6 +181,29 @@ enum Commands {
         /// Analyze first token bit structure for group ID research
         #[arg(short, long)]
         analyze: bool,
+
+        /// Path to parts database for resolving part names
+        #[arg(long, default_value = "share/manifest/parts_database.json")]
+        parts_db: PathBuf,
+    },
+
+    /// Query parts database - find parts for a weapon type
+    Parts {
+        /// Weapon name (e.g. "Jakobs Pistol", "Vladof SMG")
+        #[arg(short, long)]
+        weapon: Option<String>,
+
+        /// Category ID (e.g. 3 for Jakobs Pistol)
+        #[arg(short, long)]
+        category: Option<i64>,
+
+        /// List all categories
+        #[arg(short, long)]
+        list: bool,
+
+        /// Path to parts database
+        #[arg(long, default_value = "share/manifest/parts_database.json")]
+        parts_db: PathBuf,
     },
 
     /// Read/analyze game memory (live process or dump file)
@@ -753,6 +776,7 @@ fn main() -> Result<()> {
             verbose,
             debug,
             analyze,
+            parts_db,
         } => {
             let item = bl4::ItemSerial::decode(&serial).context("Failed to decode serial")?;
 
@@ -793,6 +817,74 @@ fn main() -> Result<()> {
             println!("Decoded bytes: {}", item.raw_bytes.len());
             println!("Hex: {}", item.hex_dump());
             println!("Tokens: {}", item.format_tokens());
+
+            // Try to resolve part names from database
+            // Get category from either VarBit-first format or VarInt-first format
+            let category: Option<i64> = item.part_group_id().or_else(|| {
+                // Try to derive from VarInt-first weapon info
+                item.weapon_info().and_then(|(mfr, wtype)| {
+                    // Map short weapon type to full name
+                    let weapon_full = match wtype {
+                        "AR" => "Assault Rifle",
+                        "SMG" => "SMG",
+                        "SR" => "Sniper",
+                        "PS" => "Pistol",
+                        "SG" => "Shotgun",
+                        "HW" => "Heavy",
+                        _ => wtype,
+                    };
+                    let search = format!("{} {}", mfr, weapon_full).to_lowercase();
+                    // Search known categories
+                    for cat in 1..=500 {
+                        if let Some(name) = bl4::category_name(cat) {
+                            if name.to_lowercase() == search {
+                                return Some(cat);
+                            }
+                        }
+                    }
+                    None
+                })
+            });
+
+            // Resolve part names if we have a category and parts database
+            let parts = item.parts();
+            if let (Some(category), false) = (category, parts.is_empty()) {
+                #[derive(Debug, Deserialize)]
+                struct PartsDb {
+                    parts: Vec<PartDbEntry>,
+                }
+                #[derive(Debug, Deserialize)]
+                struct PartDbEntry {
+                    name: String,
+                    category: i64,
+                    index: i64,
+                }
+
+                if let Ok(db_content) = fs::read_to_string(&parts_db) {
+                    if let Ok(db) = serde_json::from_str::<PartsDb>(&db_content) {
+                        let lookup: std::collections::HashMap<(i64, i64), &str> = db
+                            .parts
+                            .iter()
+                            .map(|p| ((p.category, p.index), p.name.as_str()))
+                            .collect();
+
+                        println!("\nResolved parts:");
+                        for (part_index, values) in &parts {
+                            let idx_i64 = *part_index as i64;
+                            let extra = if values.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" (values: {:?})", values)
+                            };
+                            if let Some(name) = lookup.get(&(category, idx_i64)) {
+                                println!("  {}{}", name, extra);
+                            } else {
+                                println!("  [unknown part index {}]{}", part_index, extra);
+                            }
+                        }
+                    }
+                }
+            }
 
             if verbose {
                 println!("\n{}", item.detailed_dump());
@@ -881,6 +973,131 @@ fn main() -> Result<()> {
             }
         }
 
+        Commands::Parts {
+            weapon,
+            category,
+            list,
+            parts_db,
+        } => {
+            // Load parts database
+            let db_content = fs::read_to_string(&parts_db)
+                .with_context(|| format!("Failed to read parts database: {:?}", parts_db))?;
+
+            #[derive(Debug, Deserialize)]
+            struct PartsDatabase {
+                parts: Vec<PartEntry>,
+            }
+
+            #[derive(Debug, Deserialize)]
+            struct PartEntry {
+                name: String,
+                category: i64,
+                index: i64,
+            }
+
+            let db: PartsDatabase =
+                serde_json::from_str(&db_content).context("Failed to parse parts database")?;
+
+            // Build category -> parts mapping
+            let mut by_category: std::collections::BTreeMap<i64, Vec<&PartEntry>> =
+                std::collections::BTreeMap::new();
+            for part in &db.parts {
+                by_category.entry(part.category).or_default().push(part);
+            }
+
+            if list {
+                // List all categories
+                println!("Available categories:");
+                println!();
+                for (&cat_id, parts) in &by_category {
+                    let cat_name = bl4::category_name(cat_id).unwrap_or("Unknown");
+                    println!("  {:3}: {} ({} parts)", cat_id, cat_name, parts.len());
+                }
+                println!();
+                println!(
+                    "Total: {} categories, {} parts",
+                    by_category.len(),
+                    db.parts.len()
+                );
+                return Ok(());
+            }
+
+            // Find target category
+            let target_cat: Option<i64> = if let Some(cat) = category {
+                Some(cat)
+            } else if let Some(ref wname) = weapon {
+                // Search for category by weapon name
+                let search = wname.to_lowercase();
+                let mut found = None;
+                for &cat_id in by_category.keys() {
+                    if let Some(name) = bl4::category_name(cat_id) {
+                        if name.to_lowercase().contains(&search) {
+                            if found.is_some() {
+                                println!("Multiple matches for '{}'. Please be more specific or use -c <category_id>", wname);
+                                for &c in by_category.keys() {
+                                    if let Some(n) = bl4::category_name(c) {
+                                        if n.to_lowercase().contains(&search) {
+                                            println!("  {:3}: {}", c, n);
+                                        }
+                                    }
+                                }
+                                return Ok(());
+                            }
+                            found = Some(cat_id);
+                        }
+                    }
+                }
+                found
+            } else {
+                None
+            };
+
+            if let Some(cat_id) = target_cat {
+                let cat_name = bl4::category_name(cat_id).unwrap_or("Unknown");
+                let parts = by_category.get(&cat_id);
+
+                println!("Parts for {} (category {}):", cat_name, cat_id);
+                println!();
+
+                if let Some(parts) = parts {
+                    // Group by part type (barrel, grip, mag, etc.)
+                    let mut by_type: std::collections::BTreeMap<String, Vec<&&PartEntry>> =
+                        std::collections::BTreeMap::new();
+
+                    for part in parts {
+                        // Extract part type from name (e.g., "DAD_PS.part_barrel_01" -> "barrel")
+                        let part_type = part
+                            .name
+                            .split(".part_")
+                            .nth(1)
+                            .and_then(|s| s.split('_').next())
+                            .unwrap_or("other")
+                            .to_string();
+                        by_type.entry(part_type).or_default().push(part);
+                    }
+
+                    for (ptype, type_parts) in &by_type {
+                        println!("  {} ({} variants):", ptype, type_parts.len());
+                        for part in type_parts {
+                            println!("    [{}] {}", part.index, part.name);
+                        }
+                        println!();
+                    }
+
+                    println!("Total: {} parts", parts.len());
+                } else {
+                    println!("  No parts found for this category");
+                }
+            } else {
+                println!("Usage: bl4 parts --weapon <name> OR --category <id> OR --list");
+                println!();
+                println!("Examples:");
+                println!("  bl4 parts --list                 # List all categories");
+                println!("  bl4 parts --weapon 'Jakobs'      # Find Jakobs weapons");
+                println!("  bl4 parts --category 3           # Show parts for category 3");
+            }
+        }
+
         Commands::Memory {
             preload,
             dump,
@@ -925,8 +1142,9 @@ fn main() -> Result<()> {
                     // Load part categories from JSON file
                     let categories_json = std::fs::read_to_string(categories)
                         .context("Failed to read part categories file")?;
-                    let categories_file: PartCategoriesFile = serde_json::from_str(&categories_json)
-                        .context("Failed to parse part categories JSON")?;
+                    let categories_file: PartCategoriesFile =
+                        serde_json::from_str(&categories_json)
+                            .context("Failed to parse part categories JSON")?;
 
                     // Convert to internal format (prefix, category_id, description)
                     let known_groups: Vec<(String, i64, String)> = categories_file
@@ -1064,7 +1282,7 @@ fn main() -> Result<()> {
                     return Ok(());
                 }
                 MemoryAction::ExtractParts { ref output } => {
-                    // This command requires a memory dump to extract UObjects
+                    // This command requires a memory dump to extract parts
                     let dump_path = match dump {
                         Some(ref p) => p.clone(),
                         None => {
@@ -1076,39 +1294,10 @@ fn main() -> Result<()> {
                     let source: Box<dyn memory::MemorySource> =
                         Box::new(memory::DumpFile::open(&dump_path)?);
 
-                    // First discover GNames
-                    println!("Discovering GNames pool...");
-                    let gnames = memory::discover_gnames(source.as_ref())?;
-                    println!("  GNames at: {:#x}", gnames.address);
-
-                    // Discover GUObjectArray
-                    println!("Discovering GUObjectArray...");
-                    let guobjects =
-                        memory::discover_guobject_array(source.as_ref(), gnames.address)?;
-                    println!("  GUObjectArray at: {:#x}", guobjects.address);
-                    println!("  NumElements: {}", guobjects.num_elements);
-
-                    // Find InventoryPartDef UClass
-                    println!("Finding InventoryPartDef UClass...");
-                    let inventory_part_def_class = memory::find_uclass_by_name(
-                        source.as_ref(),
-                        gnames.address,
-                        &guobjects,
-                        "InventoryPartDef",
-                    )?;
-                    println!(
-                        "  InventoryPartDef UClass at: {:#x}",
-                        inventory_part_def_class
-                    );
-
-                    // Extract part definitions
-                    println!("Extracting part definitions with SerialIndex...");
-                    let parts = memory::extract_part_definitions(
-                        source.as_ref(),
-                        gnames.address,
-                        &guobjects,
-                        inventory_part_def_class,
-                    )?;
+                    // Use the new FName array pattern extraction
+                    // This method scans for 0xFFFFFFFF markers in part registration arrays,
+                    // then follows pointers to read GbxSerialNumberIndex at UObject+0x20
+                    let parts = memory::extract_parts_from_fname_arrays(source.as_ref())?;
 
                     println!("Found {} part definitions", parts.len());
 
@@ -1123,7 +1312,13 @@ fn main() -> Result<()> {
 
                     println!("\nCategories found:");
                     for (category, cat_parts) in &by_category {
-                        println!("  Category {}: {} parts", category, cat_parts.len());
+                        let max_idx = cat_parts.iter().map(|p| p.index).max().unwrap_or(0);
+                        println!(
+                            "  Category {:3}: {:3} parts (max index: {})",
+                            category,
+                            cat_parts.len(),
+                            max_idx
+                        );
                     }
 
                     // Write output JSON
@@ -1635,37 +1830,60 @@ fn main() -> Result<()> {
                 MemoryAction::FnameSearch { query } => {
                     let source = mem_source!();
 
-                    let gnames =
-                        memory::discover_gnames(source).context("Failed to find GNames pool")?;
+                    // Discover FNamePool to get all blocks
+                    let pool = memory::FNamePool::discover(source)
+                        .context("Failed to discover FNamePool")?;
 
                     println!(
-                        "Searching for \"{}\" in FName pool at {:#x}...",
-                        query, gnames.address
+                        "Searching for \"{}\" across {} FName blocks...",
+                        query,
+                        pool.blocks.len()
                     );
 
-                    // Search in block 0 (where common names like "Class" reside)
                     let search_bytes = query.as_bytes();
-
-                    // Read block 0 data and search
-                    let block0_data = source.read_bytes(gnames.address, 256 * 1024)?;
-
                     let mut found = Vec::new();
-                    for (pos, window) in block0_data.windows(search_bytes.len()).enumerate() {
-                        if window == search_bytes {
-                            // Found match - try to find the entry start
-                            // Look backwards for header bytes
-                            if pos >= 2 {
-                                let header = &block0_data[pos - 2..pos];
-                                let header_val = byteorder::LE::read_u16(header);
-                                let len = (header_val >> 6) as usize;
 
-                                // Alternative format check
-                                let alt_len = ((header[0] >> 1) & 0x3F) as usize;
+                    // Search all blocks
+                    for (block_idx, &block_addr) in pool.blocks.iter().enumerate() {
+                        if block_addr == 0 {
+                            continue;
+                        }
 
-                                if len == search_bytes.len() || alt_len == search_bytes.len() {
-                                    let byte_offset = pos - 2;
-                                    let fname_index = byte_offset / 2;
-                                    found.push((fname_index, pos - 2));
+                        // Read block data (64KB per block)
+                        let block_data = match source.read_bytes(block_addr, 64 * 1024) {
+                            Ok(d) => d,
+                            Err(_) => continue,
+                        };
+
+                        for (pos, window) in block_data.windows(search_bytes.len()).enumerate() {
+                            if window == search_bytes {
+                                // Found match - try to find the entry start
+                                if pos >= 2 {
+                                    let header = &block_data[pos - 2..pos];
+                                    let header_val = byteorder::LE::read_u16(header);
+                                    let len = (header_val >> 6) as usize;
+
+                                    // Verify this is a valid entry header
+                                    if len > 0 && len <= 1024 {
+                                        // Read the full name from header position
+                                        let name_start = pos - 2 + 2;
+                                        let name_end = name_start + len;
+                                        if name_end <= block_data.len() {
+                                            let full_name = String::from_utf8_lossy(
+                                                &block_data[name_start..name_end],
+                                            );
+                                            let byte_offset = pos - 2;
+                                            // FName index = (block_idx << 16) | (byte_offset / 2)
+                                            let fname_index = ((block_idx as u32) << 16)
+                                                | ((byte_offset / 2) as u32);
+                                            found.push((
+                                                fname_index,
+                                                block_idx,
+                                                byte_offset,
+                                                full_name.to_string(),
+                                            ));
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1674,20 +1892,15 @@ fn main() -> Result<()> {
                     if found.is_empty() {
                         println!("No matches found for \"{}\"", query);
                     } else {
-                        println!("Found {} potential matches:", found.len());
-                        for (idx, byte_offset) in found.iter().take(20) {
-                            println!("  FName index ~{} (byte offset {:#x})", idx, byte_offset);
-
-                            // Read and show the entry
-                            if *byte_offset + 16 < block0_data.len() {
-                                let entry_data = &block0_data[*byte_offset
-                                    ..*byte_offset + 16.min(block0_data.len() - byte_offset)];
-                                print!("    Raw: ");
-                                for b in entry_data.iter().take(16) {
-                                    print!("{:02x} ", b);
-                                }
-                                println!();
-                            }
+                        println!("Found {} matches:", found.len());
+                        for (fname_index, block_idx, byte_offset, name) in found.iter().take(50) {
+                            println!(
+                                "  FName[{:#x}] = \"{}\" (block {}, offset {:#x})",
+                                fname_index, name, block_idx, byte_offset
+                            );
+                        }
+                        if found.len() > 50 {
+                            println!("  ... and {} more", found.len() - 50);
                         }
                     }
                 }
@@ -3099,8 +3312,10 @@ fn main() -> Result<()> {
             // Parse parts array from JSON
             // Structure: { "parts": [ { "category": N, "name": "...", ... }, ... ], "categories": {...} }
             let parts_start = data.find("\"parts\"").context("Missing 'parts' key")?;
-            let array_start =
-                data[parts_start..].find('[').context("Missing parts array")? + parts_start;
+            let array_start = data[parts_start..]
+                .find('[')
+                .context("Missing parts array")?
+                + parts_start;
 
             // Find the matching closing bracket
             let mut depth = 0;
@@ -3289,7 +3504,10 @@ fn main() -> Result<()> {
 
             fs::write(&output, &json)?;
 
-            println!("Extracted {} part pools with {} total parts", pool_count, total_parts);
+            println!(
+                "Extracted {} part pools with {} total parts",
+                pool_count, total_parts
+            );
             println!("\nData sources:");
             println!("  Part names: Memory extraction (authoritative)");
             println!("  Categories: Prefix matching (verified by decode)");

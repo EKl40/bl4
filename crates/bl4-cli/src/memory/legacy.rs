@@ -5001,6 +5001,353 @@ pub fn extract_part_definitions(
     Ok(parts)
 }
 
+/// Map part name prefix to Part Group ID (category)
+fn get_category_for_part(name: &str) -> Option<i64> {
+    // Extract prefix (everything before ".part_")
+    let prefix = name.split(".part_").next()?.to_lowercase();
+
+    // Map prefixes to Part Group IDs (derived from reference data)
+    match prefix.as_str() {
+        // Pistols (2-6)
+        "dad_ps" => Some(2),
+        "jak_ps" => Some(3),
+        "ted_ps" => Some(4),
+        "tor_ps" => Some(5),
+        "ord_ps" => Some(6),
+
+        // Shotguns (8-12)
+        "dad_sg" => Some(8),
+        "jak_sg" => Some(9),
+        "ted_sg" => Some(10),
+        "tor_sg" => Some(11),
+        "bor_sg" => Some(12),
+
+        // Assault Rifles (13-18)
+        "dad_ar" => Some(13),
+        "jak_ar" => Some(14),
+        "ted_ar" => Some(15),
+        "tor_ar" => Some(16),
+        "vla_ar" => Some(17),
+        "ord_ar" => Some(18),
+
+        // SMGs (19-24)
+        "mal_sg" => Some(19), // Maliwan SG is actually an SMG category
+        "dad_sm" => Some(20),
+        "bor_sm" => Some(21),
+        "vla_sm" => Some(22),
+        "mal_sm" => Some(23),
+
+        // Snipers (25-29)
+        "bor_sr" => Some(25),
+        "jak_sr" => Some(26),
+        "ord_sr" => Some(28),
+        "mal_sr" => Some(29),
+
+        // Class mods
+        "classmod_gravitar" | "classmod" => Some(97),
+
+        // Heavy Weapons (244-247)
+        "vla_hw" => Some(244),
+        "tor_hw" => Some(245),
+        "bor_hw" => Some(246),
+        "mal_hw" => Some(247),
+
+        // Shields (279-288)
+        "energy_shield" => Some(279),
+        "bor_shield" => Some(280),
+        "dad_shield" => Some(281),
+        "jak_shield" => Some(282),
+        "armor_shield" => Some(283),
+        "mal_shield" => Some(284),
+        "ord_shield" => Some(285),
+        "ted_shield" => Some(286),
+        "tor_shield" => Some(287),
+
+        // Gadgets (300-330)
+        "grenade_gadget" | "mal_grenade_gadget" => Some(300),
+        "turret_gadget" | "weapon_turret" => Some(310),
+        "repair_kit" | "dad_repair_kit" => Some(320),
+        "terminal_gadget" | "dad_terminal" | "mal_terminal" | "ord_terminal" | "ted_terminal" => {
+            Some(330)
+        }
+
+        // Enhancements (400-409)
+        "dad_enhancement" | "enhancement" => Some(400),
+        "bor_enhancement" => Some(401),
+        "jak_enhancement" => Some(402),
+        "mal_enhancement" => Some(403),
+        "ord_enhancement" => Some(404),
+        "ted_enhancement" => Some(405),
+        "tor_enhancement" => Some(406),
+        "vla_enhancement" => Some(407),
+        "cov_enhancement" => Some(408),
+        "atl_enhancement" => Some(409),
+
+        // Shield parts
+        "shield" => Some(279),
+
+        // Weapon parts for special weapons
+        "weapon_brute" | "weapon_ripperturret" => Some(310),
+
+        // Fallback: try to match partial prefixes
+        other => {
+            if other.ends_with("_ps") {
+                Some(2)
+            } else if other.ends_with("_sg") {
+                Some(8)
+            } else if other.ends_with("_ar") {
+                Some(13)
+            } else if other.ends_with("_sm") {
+                Some(20)
+            } else if other.ends_with("_sr") {
+                Some(25)
+            } else if other.ends_with("_hw") {
+                Some(244)
+            } else if other.contains("shield") {
+                Some(279)
+            } else if other.contains("gadget") {
+                Some(300)
+            } else if other.contains("enhancement") {
+                Some(400)
+            } else if other.contains("terminal") {
+                Some(330)
+            } else if other.contains("turret") {
+                Some(310)
+            } else if other.contains("repair") {
+                Some(320)
+            } else if other.contains("grenade") {
+                Some(300)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Extract part definitions using the discovered FName array pattern.
+///
+/// The game registers parts in internal arrays with a specific structure:
+/// - Part Array Entry (24 bytes):
+///   - FName Index (4 bytes) - References the part name in FNamePool
+///   - Padding (4 bytes) - Always zero
+///   - Pointer (8 bytes) - Address of the part's UObject
+///   - Marker (4 bytes) - 0xFFFFFFFF sentinel value
+///   - Priority (4 bytes) - Selection priority (not the serial index!)
+///
+/// - UObject at Pointer (offset +0x28):
+///   - Scope (1 byte) - EGbxSerialNumberIndexScope (Root=1, Sub=2)
+///   - (reserved 1 byte)
+///   - Index (2 bytes, Int16) - THE SERIAL INDEX we need!
+///
+/// The Part Group ID (category) is derived from the part name prefix, as it's not
+/// stored directly in the UObject structure at a fixed offset.
+pub fn extract_parts_from_fname_arrays(source: &dyn MemorySource) -> Result<Vec<PartDefinition>> {
+    eprintln!("Extracting parts via FName array pattern...");
+
+    // Discover FNamePool for name resolution
+    let pool = FNamePool::discover(source)?;
+
+    // Step 1: Build a set of all part FName indices for quick lookup
+    eprintln!("Step 1: Building FName lookup table from FNamePool...");
+    let part_fnames = search_fname_pool_for_parts(source, &pool)?;
+    eprintln!("Found {} FNames containing '.part_'", part_fnames.len());
+
+    if part_fnames.is_empty() {
+        bail!("No part FNames found in FNamePool");
+    }
+
+    // Create a HashMap for quick FName index -> name lookup
+    let fname_to_name: std::collections::HashMap<u32, String> = part_fnames.into_iter().collect();
+
+    // Step 2: Scan for 0xFFFFFFFF markers in targeted memory regions
+    eprintln!("Step 2: Scanning for part array entries...");
+
+    let marker_pattern = [0xFF, 0xFF, 0xFF, 0xFF];
+    let mask = vec![1u8; 4];
+
+    let mut parts = Vec::new();
+    let mut seen_keys: std::collections::HashSet<(i64, i16, String)> =
+        std::collections::HashSet::new();
+
+    let mut processed_regions = 0;
+    let mut total_markers = 0;
+
+    // Process memory regions in chunks
+    for region in source.regions() {
+        // Skip very small or very large regions
+        if region.size() < 1024 || region.size() > 500 * 1024 * 1024 {
+            continue;
+        }
+        if !region.is_readable() {
+            continue;
+        }
+
+        processed_regions += 1;
+        if processed_regions % 100 == 0 {
+            eprintln!(
+                "  Processed {} regions, found {} parts so far...",
+                processed_regions,
+                parts.len()
+            );
+        }
+
+        // Read the region
+        let region_data = match source.read_bytes(region.start, region.size()) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        // Scan for markers using SIMD-accelerated search
+        let marker_offsets = scan_pattern_fast(&region_data, &marker_pattern, &mask);
+        total_markers += marker_offsets.len();
+
+        for &marker_offset in &marker_offsets {
+            // Entry structure: FName(4) + padding(4) + pointer(8) + marker(4) + priority(4)
+            if marker_offset < 16 {
+                continue;
+            }
+            let entry_offset = marker_offset - 16;
+            if entry_offset + 24 > region_data.len() {
+                continue;
+            }
+
+            let entry_data = &region_data[entry_offset..entry_offset + 24];
+
+            let fname_idx = LE::read_u32(&entry_data[0..4]);
+            let padding = LE::read_u32(&entry_data[4..8]);
+            let pointer = LE::read_u64(&entry_data[8..16]) as usize;
+            let marker = LE::read_u32(&entry_data[16..20]);
+
+            // Validate entry structure
+            if marker != 0xFFFFFFFF {
+                continue;
+            }
+            if padding != 0 {
+                continue;
+            }
+            if pointer < MIN_VALID_POINTER || pointer > MAX_VALID_POINTER {
+                continue;
+            }
+
+            // Check if this FName is a known part name
+            let name = match fname_to_name.get(&fname_idx) {
+                Some(n) => n.clone(),
+                None => continue,
+            };
+
+            // Read index at UObject+0x2A (skipping scope bytes at +0x28-0x29)
+            let serial_data = match source.read_bytes(pointer + 0x28, 4) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            let index = LE::read_i16(&serial_data[2..4]);
+
+            // Validate index
+            if index < 0 || index > 1000 {
+                continue;
+            }
+
+            // Derive category from part name prefix
+            let category = match get_category_for_part(&name) {
+                Some(c) => c,
+                None => continue, // Unknown prefix, skip
+            };
+
+            // Skip duplicates
+            let key = (category, index, name.clone());
+            if seen_keys.contains(&key) {
+                continue;
+            }
+            seen_keys.insert(key);
+
+            parts.push(PartDefinition {
+                name,
+                category,
+                index,
+                object_address: pointer,
+            });
+        }
+    }
+
+    eprintln!(
+        "Extraction complete: processed {} regions, {} markers, extracted {} parts",
+        processed_regions,
+        total_markers,
+        parts.len()
+    );
+
+    // Sort by category and index
+    parts.sort_by_key(|p| (p.category, p.index));
+
+    Ok(parts)
+}
+
+/// Search FNamePool for all names containing ".part_"
+fn search_fname_pool_for_parts(
+    source: &dyn MemorySource,
+    pool: &FNamePool,
+) -> Result<Vec<(u32, String)>> {
+    let search_pattern = b".part_";
+    let mut results = Vec::new();
+
+    for (block_idx, &block_addr) in pool.blocks.iter().enumerate() {
+        if block_addr == 0 {
+            continue;
+        }
+
+        // Read block data (64KB per block)
+        let block_data = match source.read_bytes(block_addr, 64 * 1024) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        // Search for ".part_" pattern within the block
+        for (pos, window) in block_data.windows(search_pattern.len()).enumerate() {
+            if window == search_pattern {
+                // Found potential match - try to find the entry start
+                // Walk backwards to find the header (length byte)
+                let mut entry_start = None;
+                for back in 1..64 {
+                    if pos < back + 2 {
+                        break;
+                    }
+                    let header_pos = pos - back;
+                    let header = &block_data[header_pos..header_pos + 2];
+                    let header_val = LE::read_u16(header);
+                    let len = (header_val >> 6) as usize;
+
+                    // Check if this looks like a valid header
+                    if len > 0 && len <= 1024 && header_pos + 2 + len <= block_data.len() {
+                        // Verify the string contains our pattern
+                        let name_bytes = &block_data[header_pos + 2..header_pos + 2 + len];
+                        if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                            if name_str.to_lowercase().contains(".part_") {
+                                // Valid entry found
+                                let byte_offset = header_pos;
+                                // FName index = (block_idx << 16) | (byte_offset / 2)
+                                let fname_index =
+                                    ((block_idx as u32) << 16) | ((byte_offset / 2) as u32);
+                                entry_start = Some((fname_index, name_str.to_string()));
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if let Some((fname_idx, name)) = entry_start {
+                    // Avoid duplicates from overlapping pattern matches
+                    if !results.iter().any(|(idx, _)| *idx == fname_idx) {
+                        results.push((fname_idx, name));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

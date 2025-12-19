@@ -233,7 +233,7 @@ mod tests {
         // High-level encoding (bit 7 set)
         assert_eq!(level_from_code(196), Some(50)); // 16 + 34 + 0 = 50
         assert_eq!(level_from_code(128), Some(16)); // 16 + 0 + 0 = 16
-        // Invalid
+                                                    // Invalid
         assert_eq!(level_from_code(51), None);
     }
 }
