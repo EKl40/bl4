@@ -532,7 +532,7 @@ fn main() -> Result<()> {
             let elements = manifest::extract_elements_from_pak(&pak_manifest)?;
 
             println!("\nDiscovered {} element types:", elements.len());
-            for (name, _elem) in &elements {
+            for name in elements.keys() {
                 println!("  {}", name);
             }
 

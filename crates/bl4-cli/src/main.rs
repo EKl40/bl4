@@ -1282,17 +1282,19 @@ fn main() -> Result<()> {
                     return Ok(());
                 }
                 MemoryAction::ExtractParts { ref output } => {
-                    // This command requires a memory dump to extract parts
-                    let dump_path = match dump {
-                        Some(ref p) => p.clone(),
+                    // This command works with both dump files and live memory
+                    let source: Box<dyn memory::MemorySource> = match dump {
+                        Some(ref p) => {
+                            println!("Extracting part definitions from dump...");
+                            Box::new(memory::DumpFile::open(p)?)
+                        }
                         None => {
-                            bail!("ExtractParts requires a memory dump file. Use --dump <path>")
+                            println!("Extracting part definitions from live process...");
+                            let proc = memory::Bl4Process::attach()
+                                .context("Failed to attach to Borderlands 4 process")?;
+                            Box::new(proc)
                         }
                     };
-
-                    println!("Extracting part definitions from dump...");
-                    let source: Box<dyn memory::MemorySource> =
-                        Box::new(memory::DumpFile::open(&dump_path)?);
 
                     // Use the new FName array pattern extraction
                     // This method scans for 0xFFFFFFFF markers in part registration arrays,
@@ -3386,8 +3388,7 @@ fn main() -> Result<()> {
                                         }
                                     }
                                     "name" => {
-                                        if value_start.starts_with('"') {
-                                            let name_rest = &value_start[1..];
+                                        if let Some(name_rest) = value_start.strip_prefix('"') {
                                             if let Some(name_end) = name_rest.find('"') {
                                                 current_name = name_rest[..name_end].to_string();
                                             }
@@ -3451,7 +3452,10 @@ fn main() -> Result<()> {
 
             // Build output JSON with clear metadata
             let mut json = String::from("{\n");
-            json.push_str("  \"version\": \"1.0\",\n");
+            json.push_str(&format!(
+                "  \"version\": \"{}\",\n",
+                env!("CARGO_PKG_VERSION")
+            ));
             json.push_str("  \"source\": \"parts_database.json (memory-extracted part names)\",\n");
             json.push_str("  \"notes\": {\n");
             json.push_str("    \"part_names\": \"Extracted from game memory via string pattern matching - AUTHORITATIVE\",\n");
