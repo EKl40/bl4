@@ -855,32 +855,8 @@ fn main() -> Result<()> {
             println!("Tokens: {}", item.format_tokens());
 
             // Try to resolve part names from database
-            // Get category from either VarBit-first format or VarInt-first format
-            let category: Option<i64> = item.part_group_id().or_else(|| {
-                // Try to derive from VarInt-first weapon info
-                item.weapon_info().and_then(|(mfr, wtype)| {
-                    // Map short weapon type to full name
-                    let weapon_full = match wtype {
-                        "AR" => "Assault Rifle",
-                        "SMG" => "SMG",
-                        "SR" => "Sniper",
-                        "PS" => "Pistol",
-                        "SG" => "Shotgun",
-                        "HW" => "Heavy",
-                        _ => wtype,
-                    };
-                    let search = format!("{} {}", mfr, weapon_full).to_lowercase();
-                    // Search known categories
-                    for cat in 1..=500 {
-                        if let Some(name) = bl4::category_name(cat) {
-                            if name.to_lowercase() == search {
-                                return Some(cat);
-                            }
-                        }
-                    }
-                    None
-                })
-            });
+            // Get category from VarBit-first format or convert VarInt serial ID
+            let category: Option<i64> = item.parts_category();
 
             // Resolve part names if we have a category and parts database
             let parts = item.parts();

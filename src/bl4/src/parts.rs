@@ -2,6 +2,9 @@
 //!
 //! Maps manufacturer IDs, weapon types, and categories to human-readable names.
 //! Part index data is stored in share/manifest/ for reference only.
+//!
+//! NOTE: Serial IDs (first varint) differ from Parts DB Categories!
+//! Use `serial_id_to_parts_category()` to convert.
 
 use phf::phf_map;
 
@@ -59,6 +62,54 @@ static WEAPON_INFO: phf::Map<u64, (&'static str, &'static str)> = phf_map! {
     168640u64 => ("", "Energy Shield"),    // [V] Tagged bank items
     238272u64 => ("", "Energy Shield"),    // [V] Tagged bank items
 };
+
+/// Serial ID (first varint) to Parts Database Category mapping
+/// Serial IDs in decoded serials differ from the category IDs used in parts_database.json
+/// This table maps between them for correct part resolution
+static SERIAL_TO_PARTS_CAT: phf::Map<u64, u64> = phf_map! {
+    // Shotguns
+    1u64 => 8,    // DAD_SG
+    3u64 => 11,   // TOR_SG
+    5u64 => 19,   // MAL_SG
+    9u64 => 9,    // JAK_SG
+    13u64 => 10,  // TED_SG
+    14u64 => 12,  // RIP_SG (Bor Shotgun)
+
+    // Pistols
+    2u64 => 3,    // JAK_PS
+    4u64 => 2,    // DAD_PS
+    6u64 => 5,    // TOR_PS
+    10u64 => 4,   // TED_PS
+    12u64 => 3,   // JAK_PS (alternate)
+
+    // Assault Rifles (low IDs)
+    7u64 => 15,   // TED_AR
+    11u64 => 13,  // DAD_AR
+    15u64 => 18,  // ORD_AR
+
+    // Snipers (high IDs)
+    128u64 => 27, // VLA_SR
+    129u64 => 26, // JAK_SR
+    133u64 => 28, // ORD_SR
+    137u64 => 29, // MAL_SR
+    142u64 => 25, // BOR_SR
+
+    // SMGs (high IDs)
+    130u64 => 20, // DAD_SM
+    134u64 => 21, // BOR_SM
+    138u64 => 23, // MAL_SM
+    140u64 => 22, // VLA_SM
+
+    // Assault Rifles (high IDs)
+    132u64 => 17, // VLA_AR
+    136u64 => 16, // TOR_AR
+    141u64 => 14, // JAK_AR
+};
+
+/// Convert serial ID (first varint) to parts database category
+pub fn serial_id_to_parts_category(serial_id: u64) -> u64 {
+    SERIAL_TO_PARTS_CAT.get(&serial_id).copied().unwrap_or(serial_id)
+}
 
 /// Part Group ID (Category) to name mapping
 /// Derived from memory dump analysis and serial decoding

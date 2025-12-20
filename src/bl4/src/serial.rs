@@ -10,7 +10,7 @@
 
 use crate::parts::{
     item_type_name, level_from_code, manufacturer_name, serial_format,
-    weapon_info_from_first_varint,
+    serial_id_to_parts_category, weapon_info_from_first_varint,
 };
 
 /// Custom Base85 alphabet used by Borderlands 4
@@ -835,6 +835,21 @@ impl ItemSerial {
             }
         })?;
         fmt.extract_category(first_varbit)
+    }
+
+    /// Get the parts database category for this item
+    ///
+    /// For VarBit-first items (shields, etc), uses the extracted category.
+    /// For VarInt-first items (weapons), converts the serial ID to parts DB category.
+    pub fn parts_category(&self) -> Option<i64> {
+        // First try VarBit-first extraction
+        if let Some(cat) = self.part_group_id() {
+            return Some(cat);
+        }
+
+        // Fall back to VarInt-first: convert serial ID to parts category
+        self.manufacturer
+            .map(|id| serial_id_to_parts_category(id) as i64)
     }
 
     /// Get all Part tokens from this serial
