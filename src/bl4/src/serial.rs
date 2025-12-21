@@ -55,6 +55,68 @@ impl Element {
     }
 }
 
+/// Item rarity levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rarity {
+    Common,
+    Uncommon,
+    Rare,
+    Epic,
+    Legendary,
+}
+
+impl Rarity {
+    /// Get rarity name
+    pub fn name(&self) -> &'static str {
+        match self {
+            Rarity::Common => "Common",
+            Rarity::Uncommon => "Uncommon",
+            Rarity::Rare => "Rare",
+            Rarity::Epic => "Epic",
+            Rarity::Legendary => "Legendary",
+        }
+    }
+
+    /// Extract rarity from VarBit-first equipment format
+    /// Rarity is encoded in bits 6-7 of (first_varbit % divisor)
+    pub fn from_equipment_varbit(varbit: u64, divisor: u64) -> Option<Self> {
+        if divisor == 0 {
+            return None;
+        }
+        let remainder = varbit % divisor;
+        let rarity_bits = (remainder >> 6) & 0x3;
+        match rarity_bits {
+            0 => Some(Rarity::Common),
+            1 => Some(Rarity::Epic), // Observed: 64 >> 6 = 1 for Epic
+            2 => Some(Rarity::Rare), // Hypothetical
+            3 => Some(Rarity::Legendary), // Observed: 192 >> 6 = 3 for Legendary
+            _ => None,
+        }
+    }
+
+    /// Extract rarity from VarInt-first weapon format
+    /// For level codes > 145 (max level 50), rarity is encoded in the offset
+    pub fn from_weapon_level_code(code: u64) -> Option<Self> {
+        // Level codes 128-145 encode levels 16-50 (Common rarity)
+        // Codes > 145 encode level 50 + rarity
+        if code <= 145 {
+            Some(Rarity::Common)
+        } else {
+            // Known codes from database samples:
+            // 192 = Epic, 200 = Legendary
+            match code {
+                192 => Some(Rarity::Epic),
+                200 => Some(Rarity::Legendary),
+                // For unknown codes, estimate based on value range
+                146..=180 => Some(Rarity::Uncommon),
+                181..=195 => Some(Rarity::Epic),
+                196.. => Some(Rarity::Legendary),
+                _ => None,
+            }
+        }
+    }
+}
+
 /// Maximum reasonable part index. Part indices above this threshold indicate
 /// we're parsing garbage data (likely over-reading past the end of valid tokens).
 /// Based on analysis: most parts have indices < 100, max observed valid is ~300.
@@ -261,6 +323,8 @@ pub struct ItemSerial {
     pub seed: Option<u64>,
     /// Detected elements (from Part tokens with index 128-142)
     pub elements: Vec<Element>,
+    /// Detected rarity (from level code or equipment VarBit)
+    pub rarity: Option<Rarity>,
 }
 
 /// Decode Base85 with custom BL4 alphabet
@@ -773,6 +837,43 @@ impl ItemSerial {
             })
             .collect();
 
+        // Extract rarity based on item format
+        let rarity = if is_varbit_first {
+            // VarBit-first equipment: rarity from first VarBit
+            let first_varbit = tokens.iter().find_map(|t| {
+                if let Token::VarBit(v) = t {
+                    Some(*v)
+                } else {
+                    None
+                }
+            });
+            if let Some(varbit) = first_varbit {
+                // Get divisor for this item type
+                let divisor = serial_format(item_type)
+                    .map(|f| f.category_divisor)
+                    .unwrap_or(384);
+                Rarity::from_equipment_varbit(varbit, divisor)
+            } else {
+                None
+            }
+        } else {
+            // VarInt-first weapons: rarity from 4th VarInt (level code)
+            // Extract 4th VarInt from header
+            let mut header_varints: Vec<u64> = Vec::new();
+            for token in &tokens {
+                match token {
+                    Token::VarInt(v) => header_varints.push(*v),
+                    Token::Separator => break,
+                    _ => {}
+                }
+            }
+            if header_varints.len() >= 4 {
+                Rarity::from_weapon_level_code(header_varints[3])
+            } else {
+                None
+            }
+        };
+
         Ok(ItemSerial {
             original: serial.to_string(),
             raw_bytes,
@@ -783,6 +884,7 @@ impl ItemSerial {
             raw_level,
             seed,
             elements,
+            rarity,
         })
     }
 
@@ -846,6 +948,7 @@ impl ItemSerial {
             raw_level: self.raw_level,
             seed: self.seed,
             elements,
+            rarity: self.rarity, // Preserve rarity from original
         }
     }
 
@@ -908,6 +1011,12 @@ impl ItemSerial {
             let names: Vec<&str> = self.elements.iter().map(|e| e.name()).collect();
             Some(names.join(", "))
         }
+    }
+
+    /// Get rarity name
+    /// Returns None if rarity not detected
+    pub fn rarity_name(&self) -> Option<&'static str> {
+        self.rarity.map(|r| r.name())
     }
 
     /// Get weapon info (manufacturer, weapon type) for VarInt-first format serials

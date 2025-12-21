@@ -838,6 +838,11 @@ fn main() -> Result<()> {
                 println!("Element: {}", elements);
             }
 
+            // Show rarity if detected
+            if let Some(rarity) = item.rarity_name() {
+                println!("Rarity: {}", rarity);
+            }
+
             // Show raw manufacturer ID if we couldn't resolve it
             if item.weapon_info().is_none() {
                 if let Some(mfr) = item.manufacturer_name() {
