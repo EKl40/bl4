@@ -755,6 +755,10 @@ enum ItemsDbCommand {
         #[arg(long)]
         serial: Option<String>,
 
+        /// Also upload attachments (screenshots)
+        #[arg(long)]
+        attachments: bool,
+
         /// Only show what would be published, don't actually publish
         #[arg(long)]
         dry_run: bool,
@@ -4524,7 +4528,14 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             println!("  Values skipped (already exist): {}", stats.values_skipped);
         }
 
-        ItemsDbCommand::Publish { server, serial, dry_run } => {
+        ItemsDbCommand::Publish {
+            server,
+            serial,
+            attachments,
+            dry_run,
+        } => {
+            use bl4_idb::AttachmentsRepository;
+
             let wdb = bl4_idb::SqliteDb::open(db)?;
             wdb.init()?;
 
@@ -4542,12 +4553,39 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                 return Ok(());
             }
 
+            // Check server capabilities if attachments requested
+            let server_supports_attachments = if attachments {
+                let caps_url = format!("{}/api/capabilities", server.trim_end_matches('/'));
+                match ureq::get(&caps_url).call() {
+                    Ok(resp) => {
+                        let caps: serde_json::Value = resp.into_json()?;
+                        caps["attachments"].as_bool().unwrap_or(false)
+                    }
+                    Err(_) => {
+                        println!("Warning: Could not check server capabilities, skipping attachments");
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+
             println!("Publishing {} items to {}", items.len(), server);
+            if attachments && server_supports_attachments {
+                println!("  Attachments: enabled");
+            } else if attachments {
+                println!("  Attachments: requested but server doesn't support them");
+            }
 
             if dry_run {
                 println!("\nDry run - would publish:");
                 for item in &items {
-                    println!("  {}", item.serial);
+                    let attachment_count = wdb.get_attachments(&item.serial)?.len();
+                    if attachment_count > 0 && server_supports_attachments {
+                        println!("  {} ({} attachments)", item.serial, attachment_count);
+                    } else {
+                        println!("  {}", item.serial);
+                    }
                 }
                 return Ok(());
             }
@@ -4577,8 +4615,8 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                     let failed = result["failed"].as_u64().unwrap_or(0);
 
                     println!("\nPublish complete:");
-                    println!("  Succeeded: {}", succeeded);
-                    println!("  Failed: {}", failed);
+                    println!("  Items succeeded: {}", succeeded);
+                    println!("  Items failed: {}", failed);
 
                     if let Some(results) = result["results"].as_array() {
                         for r in results {
@@ -4594,6 +4632,82 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                 }
                 Err(e) => {
                     bail!("Request failed: {}", e);
+                }
+            }
+
+            // Upload attachments if enabled
+            if server_supports_attachments {
+                let mut attachments_uploaded = 0;
+                let mut attachments_failed = 0;
+
+                for item in &items {
+                    let item_attachments = wdb.get_attachments(&item.serial)?;
+                    for attachment in item_attachments {
+                        let data = match wdb.get_attachment_data(attachment.id)? {
+                            Some(d) => d,
+                            None => continue,
+                        };
+
+                        let upload_url = format!(
+                            "{}/api/items/{}/attachments",
+                            server.trim_end_matches('/'),
+                            urlencoding::encode(&item.serial)
+                        );
+
+                        // Build multipart form
+                        let boundary = "----bl4clipublish";
+                        let mut body = Vec::new();
+
+                        // File field
+                        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+                        body.extend_from_slice(
+                            format!(
+                                "Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n",
+                                attachment.name
+                            )
+                            .as_bytes(),
+                        );
+                        body.extend_from_slice(
+                            format!("Content-Type: {}\r\n\r\n", attachment.mime_type).as_bytes(),
+                        );
+                        body.extend_from_slice(&data);
+                        body.extend_from_slice(b"\r\n");
+
+                        // View field
+                        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+                        body.extend_from_slice(b"Content-Disposition: form-data; name=\"view\"\r\n\r\n");
+                        body.extend_from_slice(attachment.view.as_bytes());
+                        body.extend_from_slice(b"\r\n");
+
+                        // End boundary
+                        body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+
+                        let result = ureq::post(&upload_url)
+                            .set(
+                                "Content-Type",
+                                &format!("multipart/form-data; boundary={}", boundary),
+                            )
+                            .send_bytes(&body);
+
+                        match result {
+                            Ok(_) => attachments_uploaded += 1,
+                            Err(e) => {
+                                eprintln!(
+                                    "Failed to upload attachment {} for {}: {}",
+                                    attachment.name, item.serial, e
+                                );
+                                attachments_failed += 1;
+                            }
+                        }
+                    }
+                }
+
+                if attachments_uploaded > 0 || attachments_failed > 0 {
+                    println!("\nAttachments:");
+                    println!("  Uploaded: {}", attachments_uploaded);
+                    if attachments_failed > 0 {
+                        println!("  Failed: {}", attachments_failed);
+                    }
                 }
             }
         }

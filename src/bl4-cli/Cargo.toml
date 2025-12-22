@@ -32,3 +32,4 @@ memchr = "2.7"
 
 # HTTP client for publishing
 ureq = { version = "2.10", features = ["json"] }
+urlencoding = "2.1"
