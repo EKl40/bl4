@@ -1,30 +1,38 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  SaveInfo,
-  CharacterInfo,
-  InventoryItem,
-  openSave,
-  saveChanges,
   getSaveInfo,
   getCharacter,
-  setCharacter,
   getInventory,
-  selectFile,
+  setCharacter,
+  saveChanges,
 } from './api';
+import type { SaveInfo, CharacterInfo, InventoryItem } from './types';
+import { Tabs } from './components/Tabs';
+import { Button } from './components/Button';
+import { Modal } from './components/Modal';
 import { SaveSelector } from './components/SaveSelector';
 import { CharacterPanel } from './components/CharacterPanel';
 import { InventoryPanel } from './components/InventoryPanel';
+import { BankPanel } from './components/BankPanel';
+import { IdbPanel } from './components/IdbPanel';
 
-type Tab = 'character' | 'inventory' | 'bank';
+type TabId = 'character' | 'inventory' | 'bank' | 'idb';
+
+const TABS = [
+  { id: 'character', label: 'Character' },
+  { id: 'inventory', label: 'Items' },
+  { id: 'bank', label: 'Bank' },
+  { id: 'idb', label: 'IDB' },
+] as const;
 
 export default function App() {
   const [saveInfo, setSaveInfo] = useState<SaveInfo | null>(null);
   const [character, setCharacterState] = useState<CharacterInfo | null>(null);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
-  const [activeTab, setActiveTab] = useState<Tab>('character');
+  const [activeTab, setActiveTab] = useState<TabId>('character');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [steamId, setSteamId] = useState('');
+  const [showSaveModal, setShowSaveModal] = useState(false);
 
   const loadSaveData = useCallback(async () => {
     try {
@@ -45,43 +53,6 @@ export default function App() {
     }
   }, []);
 
-  const handleOpenSave = async (path: string) => {
-    if (!steamId) {
-      setError('Please enter your Steam ID');
-      return;
-    }
-    try {
-      setLoading(true);
-      setError(null);
-      await openSave(path, steamId);
-      await loadSaveData();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to open save');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSelectFile = async () => {
-    const path = await selectFile([{ name: 'Save Files', extensions: ['sav'] }]);
-    if (path) {
-      handleOpenSave(path);
-    }
-  };
-
-  const handleSave = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      await saveChanges();
-      await loadSaveData();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleCharacterUpdate = async (updates: Partial<CharacterInfo>) => {
     try {
       setError(null);
@@ -98,15 +69,61 @@ export default function App() {
     }
   };
 
+  const handleSave = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      await saveChanges();
+      setShowSaveModal(false);
+      await loadSaveData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClose = () => {
+    setSaveInfo(null);
+    setCharacterState(null);
+    setInventory([]);
+  };
+
   useEffect(() => {
     loadSaveData();
   }, [loadSaveData]);
 
+  // No save loaded - show selector
+  if (!saveInfo) {
+    return (
+      <div className="app">
+        <header className="header">
+          <h1 className="muted">BL4</h1>
+        </header>
+        <main className="content">
+          <SaveSelector onSaveOpened={loadSaveData} />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header className="header">
-        <h1>BL4 Save Editor</h1>
-        {saveInfo?.modified && <span className="modified-badge">Modified</span>}
+        <h1 className="muted">BL4</h1>
+        <div className="header-right">
+          <span className="save-path" title={saveInfo.path}>
+            {saveInfo.character_name || 'Unknown'}
+          </span>
+          {saveInfo.modified && (
+            <Button variant="warning" onClick={() => setShowSaveModal(true)}>
+              Save
+            </Button>
+          )}
+          <Button variant="ghost" onClick={handleClose}>
+            Close
+          </Button>
+        </div>
       </header>
 
       {error && (
@@ -116,61 +133,45 @@ export default function App() {
         </div>
       )}
 
-      {!saveInfo ? (
-        <SaveSelector
-          steamId={steamId}
-          onSteamIdChange={setSteamId}
-          onSelectFile={handleSelectFile}
-          onOpenPath={handleOpenSave}
-          loading={loading}
-        />
-      ) : (
-        <>
-          <div className="toolbar">
-            <span className="save-path">{saveInfo.path}</span>
-            <button onClick={handleSave} disabled={loading || !saveInfo.modified}>
-              Save Changes
-            </button>
-            <button onClick={() => setSaveInfo(null)}>Close</button>
-          </div>
+      <Tabs
+        tabs={TABS as unknown as { id: string; label: string }[]}
+        activeTab={activeTab}
+        onTabChange={(id) => setActiveTab(id as TabId)}
+      />
 
-          <nav className="tabs">
-            <button
-              className={activeTab === 'character' ? 'active' : ''}
-              onClick={() => setActiveTab('character')}
-            >
-              Character
-            </button>
-            <button
-              className={activeTab === 'inventory' ? 'active' : ''}
-              onClick={() => setActiveTab('inventory')}
-            >
-              Inventory
-            </button>
-            <button
-              className={activeTab === 'bank' ? 'active' : ''}
-              onClick={() => setActiveTab('bank')}
-            >
-              Bank
-            </button>
-          </nav>
+      <main className="content">
+        {loading && <div className="loading">Loading...</div>}
 
-          <main className="content">
-            {loading && <div className="loading">Loading...</div>}
-            {!loading && activeTab === 'character' && character && (
-              <CharacterPanel character={character} onUpdate={handleCharacterUpdate} />
-            )}
-            {!loading && activeTab === 'inventory' && (
-              <InventoryPanel items={inventory} />
-            )}
-            {!loading && activeTab === 'bank' && (
-              <div className="panel">
-                <p>Bank functionality coming soon...</p>
-              </div>
-            )}
-          </main>
-        </>
-      )}
+        {!loading && activeTab === 'character' && character && (
+          <CharacterPanel character={character} onUpdate={handleCharacterUpdate} />
+        )}
+
+        {!loading && activeTab === 'inventory' && (
+          <InventoryPanel items={inventory} />
+        )}
+
+        {!loading && activeTab === 'bank' && <BankPanel />}
+
+        {!loading && activeTab === 'idb' && <IdbPanel />}
+      </main>
+
+      <Modal
+        open={showSaveModal}
+        onClose={() => setShowSaveModal(false)}
+        title="Save Changes?"
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => setShowSaveModal(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSave} loading={loading}>
+              Save
+            </Button>
+          </>
+        }
+      >
+        <p>Save your changes to the save file?</p>
+      </Modal>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { CharacterInfo } from '../api';
+import type { CharacterInfo } from '../types';
+import { Button } from './Button';
 
 interface Props {
   character: CharacterInfo;
@@ -37,11 +38,16 @@ export function CharacterPanel({ character, onUpdate }: Props) {
     setEditValue('');
   };
 
-  const renderField = (label: string, field: string, value: string | number | null, editable = true) => (
-    <div className="field">
+  const renderField = (
+    label: string,
+    field: string,
+    value: string | number | null,
+    editable = true
+  ) => (
+    <div className="field-row">
       <label>{label}</label>
       {editing === field ? (
-        <div className="edit-field">
+        <div className="edit-inline">
           <input
             type={field === 'name' ? 'text' : 'number'}
             value={editValue}
@@ -52,16 +58,16 @@ export function CharacterPanel({ character, onUpdate }: Props) {
             }}
             autoFocus
           />
-          <button onClick={commitEdit}>✓</button>
-          <button onClick={cancelEdit}>×</button>
+          <Button variant="ghost" onClick={commitEdit}>✓</Button>
+          <Button variant="ghost" onClick={cancelEdit}>×</Button>
         </div>
       ) : (
-        <div className="display-field">
+        <div className="display-value">
           <span>{value ?? '—'}</span>
           {editable && (
-            <button className="edit-btn" onClick={() => startEdit(field, value)}>
+            <Button variant="ghost" onClick={() => startEdit(field, value)}>
               Edit
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -70,16 +76,14 @@ export function CharacterPanel({ character, onUpdate }: Props) {
 
   return (
     <div className="panel character-panel">
-      <h2>Character</h2>
-
-      <section>
+      <section className="panel-section">
         <h3>Basic Info</h3>
         {renderField('Name', 'name', character.name)}
         {renderField('Class', 'class', character.class, false)}
         {renderField('Difficulty', 'difficulty', character.difficulty, false)}
       </section>
 
-      <section>
+      <section className="panel-section">
         <h3>Level</h3>
         {renderField('Character Level', 'level', character.level, false)}
         {renderField('Character XP', 'xp', character.xp)}
@@ -87,7 +91,7 @@ export function CharacterPanel({ character, onUpdate }: Props) {
         {renderField('Specialization XP', 'specialization_xp', character.specialization_xp)}
       </section>
 
-      <section>
+      <section className="panel-section">
         <h3>Currency</h3>
         {renderField('Cash', 'cash', character.cash)}
         {renderField('Eridium', 'eridium', character.eridium)}
