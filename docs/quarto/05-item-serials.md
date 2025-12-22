@@ -240,9 +240,11 @@ bl4 decode '@Ugr$ZCm/&tH!t{KgK/Shxu>k'
 
 ---
 
-## Part Group IDs
+## Part Group IDs (Categories)
 
-The Part Group ID determines which part pool to use for decoding. Each ID corresponds to a manufacturer/weapon-type combination:
+The Part Group ID (also called Category ID) determines which part pool to use for decoding. Each ID corresponds to a manufacturer/weapon-type combination.
+
+**Important:** The first VarInt in a weapon serial (the "serial ID") is NOT the same as the Part Group ID. There's a mapping between them. For example, serial ID 2 = Jakobs Pistol, but Part Group ID 2 = Daedalus Pistol. The bl4 tools handle this conversion automatically via `serial_id_to_parts_category()`.
 
 **Pistols (2-7):**
 
@@ -359,12 +361,27 @@ The full parts database (`share/manifest/parts_database.json`) contains 2,615 pa
 
 ## Level Encoding
 
-Both weapon and equipment serials encode level using the same formula, but in different positions and token types:
+Level is encoded at different positions depending on item format:
 
-- **Weapons**: Level is the 4th VarInt (position 6 in token list)
-- **Equipment**: Level is the VarBit immediately after the first separator (position 2)
+- **Weapons**: 4th VarInt (position 6 in token list) — direct encoding
+- **Equipment**: VarBit immediately after the first separator (position 2) — **0-indexed storage**
 
-The encoding formula:
+### Equipment Level Storage (0-indexed)
+
+Equipment levels are stored as `level - 1`:
+
+| VarBit Value | Display Level | Notes |
+|--------------|---------------|-------|
+| 0 | 1 | Minimum level |
+| 29 | 30 | Mid-game |
+| 49 | 50 | Max level |
+| 50+ | Invalid | Beyond current cap |
+
+**Verification:** All items with `/)}}` pattern (level 50) have VarBit=49. Tested across Throwing Knives, Energy Shields, Class Mods, and Grenades.
+
+### Weapon Level Encoding
+
+Weapons use a different formula with codes that may include rarity information:
 
 ```rust
 fn level_from_code(code: u64) -> Option<u8> {
@@ -386,7 +403,6 @@ fn level_from_code(code: u64) -> Option<u8> {
 | 128 | 16 | 2 × (128-120) = 16 |
 | 135 | 30 | 2 × (135-120) = 30 |
 | 145 | 50 | 2 × (145-120) = 50 |
-| 200 | 160 | 2 × (200-120) = 160 |
 
 **Equipment uses VarBit for level**, not VarInt. This was a key discovery—equipment items encode level as a VarBit token, while weapons use VarInt. The bl4 tools detect the format automatically by checking if the first token is VarInt or VarBit.
 

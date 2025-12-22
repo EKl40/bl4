@@ -1,5 +1,7 @@
 # Borderlands 4 Reverse Engineering Guide
 
+> **Note:** The information in this guide is based on ongoing reverse engineering analysis. Some details may be incomplete or subject to revision as our understanding improves. If you find errors or have corrections, please reach out at hey@monokro.me.
+
 When you pick up a legendary weapon in Borderlands 4 and share it with a friend using a serial code, something remarkable happens. That short string of characters—maybe 40 characters long—encodes everything about your weapon: its manufacturer, every part attached to it, the random seed that determined its stats, even which rarity tier it rolled. Your friend pastes the code, and they get an exact duplicate.
 
 But how does it work?

@@ -241,9 +241,11 @@ bl4 decode '@Ugr$ZCm/&tH!t{KgK/Shxu>k'
 
 ---
 
-## Part Group IDs
+## Part Group IDs (Categories)
 
-The Part Group ID determines which part pool to use for decoding. Each ID corresponds to a manufacturer/weapon-type combination:
+The Part Group ID (also called Category ID) determines which part pool to use for decoding. Each ID corresponds to a manufacturer/weapon-type combination.
+
+**Important:** The first VarInt in a weapon serial (the "serial ID") is NOT the same as the Part Group ID. There's a mapping between them. For example, serial ID 2 = Jakobs Pistol, but Part Group ID 2 = Daedalus Pistol. The bl4 tools handle this conversion automatically via `serial_id_to_parts_category()`.
 
 **Pistols (2-7):**
 
@@ -362,8 +364,21 @@ The full parts database (`share/manifest/parts_database.json`) contains 2,615 pa
 
 Level is encoded at different positions depending on item format:
 
-- **Weapons**: 4th VarInt (position 6 in token list)
-- **Equipment**: VarBit immediately after the first separator (position 2)
+- **Weapons**: 4th VarInt (position 6 in token list) — direct encoding
+- **Equipment**: VarBit immediately after the first separator (position 2) — **0-indexed storage**
+
+### Equipment Level Storage (0-indexed)
+
+Equipment levels are stored as `level - 1`:
+
+| VarBit Value | Display Level | Notes |
+|--------------|---------------|-------|
+| 0 | 1 | Minimum level |
+| 29 | 30 | Mid-game |
+| 49 | 50 | Max level |
+| 50+ | Invalid | Beyond current cap |
+
+**Verification:** All items with `/)}}` pattern (level 50) have VarBit=49. Tested across Throwing Knives, Energy Shields, Class Mods, and Grenades.
 
 ### Observed Values
 
