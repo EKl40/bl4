@@ -8,7 +8,7 @@ use std::sync::Arc;
 use axum::{
     extract::{Multipart, Path as AxumPath, Query, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, MethodRouter},
     Json, Router,
 };
 use bl4_idb::{AsyncAttachmentsRepository, AsyncItemsRepository, Confidence, ItemFilter, SqlxSqliteDb, ValueSource};
@@ -251,6 +251,16 @@ async fn get_capabilities() -> Json<CapabilitiesResponse> {
         attachments: true,
         max_attachment_size: MAX_ATTACHMENT_SIZE,
     })
+}
+
+/// OPTIONS handler returns OpenAPI schema for API discovery
+async fn options_schema() -> Json<utoipa::openapi::OpenApi> {
+    Json(ApiDoc::openapi())
+}
+
+/// Helper to add OPTIONS schema handler to a route
+fn with_options(router: MethodRouter<Arc<AppState>>) -> MethodRouter<Arc<AppState>> {
+    router.options(options_schema)
 }
 
 #[utoipa::path(
@@ -738,14 +748,14 @@ async fn main() -> anyhow::Result<()> {
             let state = Arc::new(AppState { db });
 
             let app = Router::new()
-                .route("/health", get(health))
-                .route("/api/capabilities", get(get_capabilities))
-                .route("/api/items", get(list_items).post(create_item))
-                .route("/api/items/bulk", post(create_items_bulk))
-                .route("/api/items/{serial}", get(get_item))
-                .route("/api/items/{serial}/attachments", post(upload_attachment))
-                .route("/api/decode", post(decode_serial))
-                .route("/api/stats", get(get_stats))
+                .route("/health", with_options(get(health)))
+                .route("/api/capabilities", with_options(get(get_capabilities)))
+                .route("/api/items", with_options(get(list_items).post(create_item)))
+                .route("/api/items/bulk", with_options(post(create_items_bulk)))
+                .route("/api/items/{serial}", with_options(get(get_item)))
+                .route("/api/items/{serial}/attachments", with_options(post(upload_attachment)))
+                .route("/api/decode", with_options(post(decode_serial)))
+                .route("/api/stats", with_options(get(get_stats)))
                 .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
                 .route(
                     "/openapi.json",
