@@ -40,6 +40,7 @@ pub mod backup;
 pub mod crypto;
 pub mod manifest;
 pub mod parts;
+pub mod reference;
 pub mod save;
 pub mod serial;
 
@@ -58,3 +59,12 @@ pub use serial::{ItemSerial, SerialError};
 
 // Manifest data lookups
 pub use manifest::{all_categories, all_manufacturers, part_name, stats as manifest_stats};
+
+// Reference data (rarities, elements, weapon types, manufacturers, gear types)
+pub use reference::{
+    element_by_code, gear_type_by_code, legendary_by_name, manufacturer_by_code,
+    manufacturer_name_by_code, rarity_by_code, rarity_by_tier, stat_description,
+    weapon_type_by_code, ElementType, GearType, LegendaryItem, Manufacturer, RarityTier,
+    WeaponType, ELEMENT_TYPES, GEAR_TYPES, KNOWN_LEGENDARIES, MANUFACTURERS, RARITY_TIERS,
+    WEAPON_TYPES,
+};

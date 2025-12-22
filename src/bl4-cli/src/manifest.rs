@@ -14,24 +14,13 @@ use std::path::Path;
 use std::process::Command;
 use walkdir::WalkDir;
 
-/// Known manufacturer codes and their full names
-///
-/// DEPRECATED: This is hardcoded reference data.
-/// Use `extract_manufacturer_names_from_pak` for authoritative data.
+/// Get manufacturer names from bl4::reference
+/// DEPRECATED: Use `extract_manufacturer_names_from_pak` for authoritative data.
 pub fn manufacturer_names() -> HashMap<&'static str, &'static str> {
-    let mut m = HashMap::new();
-    m.insert("BOR", "Borg");
-    m.insert("DAD", "Daedalus");
-    m.insert("DPL", "Dahl");
-    m.insert("JAK", "Jakobs");
-    m.insert("MAL", "Maliwan");
-    m.insert("ORD", "Order");
-    m.insert("RIP", "Ripper");
-    m.insert("TED", "Tediore");
-    m.insert("TOR", "Torgue");
-    m.insert("VLA", "Vladof");
-    m.insert("COV", "Children of the Vault");
-    m
+    bl4::reference::MANUFACTURERS
+        .iter()
+        .map(|m| (m.code, m.name))
+        .collect()
 }
 
 /// Extracted manufacturer with full metadata
@@ -794,31 +783,9 @@ pub fn extract_stats_from_pak(pak_manifest_path: &Path) -> Result<Vec<ExtractedS
     Ok(result)
 }
 
-/// Known stat properties and their descriptions
+/// Get stat descriptions from bl4::reference
 pub fn stat_descriptions() -> HashMap<&'static str, &'static str> {
-    let mut m = HashMap::new();
-    m.insert("Damage", "Base damage");
-    m.insert("CritDamage", "Critical hit damage");
-    m.insert("FireRate", "Firing rate");
-    m.insert("ReloadTime", "Reload time");
-    m.insert("MagSize", "Magazine size");
-    m.insert("Accuracy", "Base accuracy");
-    m.insert("AccImpulse", "Accuracy impulse (recoil recovery)");
-    m.insert("AccRegen", "Accuracy regeneration");
-    m.insert("AccDelay", "Accuracy delay");
-    m.insert("Spread", "Projectile spread");
-    m.insert("Recoil", "Weapon recoil");
-    m.insert("Sway", "Weapon sway");
-    m.insert("ProjectilesPerShot", "Pellets per shot");
-    m.insert("AmmoCost", "Ammo consumption");
-    m.insert("StatusChance", "Status effect chance");
-    m.insert("StatusDamage", "Status effect damage");
-    m.insert("EquipTime", "Weapon equip time");
-    m.insert("PutDownTime", "Weapon holster time");
-    m.insert("ZoomDuration", "ADS zoom time");
-    m.insert("ElementalPower", "Elemental damage bonus");
-    m.insert("DamageRadius", "Splash damage radius");
-    m
+    bl4::reference::all_stat_descriptions()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1587,7 +1554,7 @@ pub fn extract_elemental_data(extract_dir: &Path) -> HashMap<String, AssetInfo> 
 // to clearly separate it from extracted authoritative data.
 // ============================================================================
 
-/// Rarity tiers (REFERENCE ONLY - not extracted from game)
+/// Rarity tiers (serializable wrapper for JSON output)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RarityTier {
     pub tier: u8,
@@ -1596,44 +1563,20 @@ pub struct RarityTier {
     pub color: String,
 }
 
-/// WARNING: This is hardcoded reference data, NOT extracted from game files.
-/// Use only as a guide for what to look for in extraction.
+/// Get rarity tiers from bl4::reference for JSON serialization
 pub fn rarity_tiers() -> Vec<RarityTier> {
-    vec![
-        RarityTier {
-            tier: 1,
-            code: "comp_01".into(),
-            name: "Common".into(),
-            color: "#FFFFFF".into(),
-        },
-        RarityTier {
-            tier: 2,
-            code: "comp_02".into(),
-            name: "Uncommon".into(),
-            color: "#00FF00".into(),
-        },
-        RarityTier {
-            tier: 3,
-            code: "comp_03".into(),
-            name: "Rare".into(),
-            color: "#0080FF".into(),
-        },
-        RarityTier {
-            tier: 4,
-            code: "comp_04".into(),
-            name: "Epic".into(),
-            color: "#A020F0".into(),
-        },
-        RarityTier {
-            tier: 5,
-            code: "comp_05".into(),
-            name: "Legendary".into(),
-            color: "#FFA500".into(),
-        },
-    ]
+    bl4::reference::RARITY_TIERS
+        .iter()
+        .map(|r| RarityTier {
+            tier: r.tier,
+            code: r.code.to_string(),
+            name: r.name.to_string(),
+            color: r.color.to_string(),
+        })
+        .collect()
 }
 
-/// Element types (REFERENCE ONLY - not extracted from game)
+/// Element types (serializable wrapper for JSON output)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElementType {
     pub code: String,
@@ -1642,49 +1585,20 @@ pub struct ElementType {
     pub color: String,
 }
 
-/// WARNING: This is hardcoded reference data, NOT extracted from game files.
+/// Get element types from bl4::reference for JSON serialization
 pub fn element_types() -> Vec<ElementType> {
-    vec![
-        ElementType {
-            code: "kinetic".into(),
-            name: "Impact".into(),
-            description: "Non-elemental kinetic damage".into(),
-            color: "#808080".into(),
-        },
-        ElementType {
-            code: "fire".into(),
-            name: "Fire".into(),
-            description: "Incendiary damage, effective vs flesh".into(),
-            color: "#FF4500".into(),
-        },
-        ElementType {
-            code: "shock".into(),
-            name: "Electric".into(),
-            description: "Shock damage, effective vs shields".into(),
-            color: "#00BFFF".into(),
-        },
-        ElementType {
-            code: "corrosive".into(),
-            name: "Corrosive".into(),
-            description: "Acid damage, effective vs armor".into(),
-            color: "#32CD32".into(),
-        },
-        ElementType {
-            code: "cryo".into(),
-            name: "Cryo".into(),
-            description: "Freezing damage, slows and can freeze enemies".into(),
-            color: "#ADD8E6".into(),
-        },
-        ElementType {
-            code: "radiation".into(),
-            name: "Radiation".into(),
-            description: "Radiation damage, spreads to nearby enemies".into(),
-            color: "#FFFF00".into(),
-        },
-    ]
+    bl4::reference::ELEMENT_TYPES
+        .iter()
+        .map(|e| ElementType {
+            code: e.code.to_string(),
+            name: e.name.to_string(),
+            description: e.description.to_string(),
+            color: e.color.to_string(),
+        })
+        .collect()
 }
 
-/// Known legendary items (REFERENCE ONLY - not extracted from game)
+/// Known legendary items (serializable wrapper for JSON output)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LegendaryItem {
     pub internal: String,
@@ -1693,139 +1607,20 @@ pub struct LegendaryItem {
     pub manufacturer: String,
 }
 
-/// WARNING: This is hardcoded reference data, NOT extracted from game files.
+/// Get known legendaries from bl4::reference for JSON serialization
 pub fn known_legendaries() -> Vec<LegendaryItem> {
-    vec![
-        LegendaryItem {
-            internal: "DAD_AR.comp_05_legendary_OM".into(),
-            name: "OM".into(),
-            weapon_type: "assaultrifle".into(),
-            manufacturer: "DAD".into(),
-        },
-        LegendaryItem {
-            internal: "DAD_AR_Lumberjack".into(),
-            name: "Lumberjack".into(),
-            weapon_type: "assaultrifle".into(),
-            manufacturer: "DAD".into(),
-        },
-        LegendaryItem {
-            internal: "DAD_SG.comp_05_legendary_HeartGUn".into(),
-            name: "Heart Gun".into(),
-            weapon_type: "shotgun".into(),
-            manufacturer: "DAD".into(),
-        },
-        LegendaryItem {
-            internal: "DAD_PS.Zipper".into(),
-            name: "Zipper".into(),
-            weapon_type: "pistol".into(),
-            manufacturer: "DAD".into(),
-        },
-        LegendaryItem {
-            internal: "DAD_PS.Rangefinder".into(),
-            name: "Rangefinder".into(),
-            weapon_type: "pistol".into(),
-            manufacturer: "DAD".into(),
-        },
-        LegendaryItem {
-            internal: "DAD_SG.Durendal".into(),
-            name: "Durendal".into(),
-            weapon_type: "shotgun".into(),
-            manufacturer: "DAD".into(),
-        },
-        LegendaryItem {
-            internal: "JAK_AR.comp_05_legendary_rowan".into(),
-            name: "Rowan's Call".into(),
-            weapon_type: "assaultrifle".into(),
-            manufacturer: "JAK".into(),
-        },
-        LegendaryItem {
-            internal: "JAK_PS.comp_05_legendary_kingsgambit".into(),
-            name: "King's Gambit".into(),
-            weapon_type: "pistol".into(),
-            manufacturer: "JAK".into(),
-        },
-        LegendaryItem {
-            internal: "JAK_PS.comp_05_legendary_phantom_flame".into(),
-            name: "Phantom Flame".into(),
-            weapon_type: "pistol".into(),
-            manufacturer: "JAK".into(),
-        },
-        LegendaryItem {
-            internal: "JAK_SR.comp_05_legendary_ballista".into(),
-            name: "Ballista".into(),
-            weapon_type: "sniper".into(),
-            manufacturer: "JAK".into(),
-        },
-        LegendaryItem {
-            internal: "MAL_HW.comp_05_legendary_GammaVoid".into(),
-            name: "Gamma Void".into(),
-            weapon_type: "heavy".into(),
-            manufacturer: "MAL".into(),
-        },
-        LegendaryItem {
-            internal: "MAL_SM.comp_05_legendary_OhmIGot".into(),
-            name: "Ohm I Got".into(),
-            weapon_type: "smg".into(),
-            manufacturer: "MAL".into(),
-        },
-        LegendaryItem {
-            internal: "BOR_SM.comp_05_legendary_p".into(),
-            name: "Unknown Borg SMG".into(),
-            weapon_type: "smg".into(),
-            manufacturer: "BOR".into(),
-        },
-        LegendaryItem {
-            internal: "TED_AR.comp_05_legendary_Chuck".into(),
-            name: "Chuck".into(),
-            weapon_type: "assaultrifle".into(),
-            manufacturer: "TED".into(),
-        },
-        LegendaryItem {
-            internal: "TED_PS.comp_05_legendary_Sideshow".into(),
-            name: "Sideshow".into(),
-            weapon_type: "pistol".into(),
-            manufacturer: "TED".into(),
-        },
-        LegendaryItem {
-            internal: "TED_SG.comp_05_legendary_a".into(),
-            name: "Unknown Tediore Shotgun".into(),
-            weapon_type: "shotgun".into(),
-            manufacturer: "TED".into(),
-        },
-        LegendaryItem {
-            internal: "TOR_HW.comp_05_legendary_ravenfire".into(),
-            name: "Ravenfire".into(),
-            weapon_type: "heavy".into(),
-            manufacturer: "TOR".into(),
-        },
-        LegendaryItem {
-            internal: "TOR_SG.comp_05_legendary_Linebacker".into(),
-            name: "Linebacker".into(),
-            weapon_type: "shotgun".into(),
-            manufacturer: "TOR".into(),
-        },
-        LegendaryItem {
-            internal: "VLA_AR.comp_05_legendary_WomboCombo".into(),
-            name: "Wombo Combo".into(),
-            weapon_type: "assaultrifle".into(),
-            manufacturer: "VLA".into(),
-        },
-        LegendaryItem {
-            internal: "VLA_HW.comp_05_legendary_AtlingGun".into(),
-            name: "Atling Gun".into(),
-            weapon_type: "heavy".into(),
-            manufacturer: "VLA".into(),
-        },
-        LegendaryItem {
-            internal: "VLA_SM.comp_05_legendary_KaoSon".into(),
-            name: "Kaoson".into(),
-            weapon_type: "smg".into(),
-            manufacturer: "VLA".into(),
-        },
-    ]
+    bl4::reference::KNOWN_LEGENDARIES
+        .iter()
+        .map(|l| LegendaryItem {
+            internal: l.internal.to_string(),
+            name: l.name.to_string(),
+            weapon_type: l.weapon_type.to_string(),
+            manufacturer: l.manufacturer.to_string(),
+        })
+        .collect()
 }
 
-/// Weapon type definitions (REFERENCE ONLY - not extracted from game)
+/// Weapon type definitions (serializable wrapper for JSON output)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeaponTypeInfo {
     pub code: String,
@@ -1833,43 +1628,19 @@ pub struct WeaponTypeInfo {
     pub description: String,
 }
 
-/// WARNING: This is hardcoded reference data, NOT extracted from game files.
+/// Get weapon type info from bl4::reference for JSON serialization
 pub fn weapon_type_info() -> Vec<WeaponTypeInfo> {
-    vec![
-        WeaponTypeInfo {
-            code: "AR".into(),
-            name: "Assault Rifle".into(),
-            description: "Full-auto/burst fire rifles".into(),
-        },
-        WeaponTypeInfo {
-            code: "HW".into(),
-            name: "Heavy Weapon".into(),
-            description: "Launchers and miniguns".into(),
-        },
-        WeaponTypeInfo {
-            code: "PS".into(),
-            name: "Pistol".into(),
-            description: "Semi-auto and full-auto handguns".into(),
-        },
-        WeaponTypeInfo {
-            code: "SG".into(),
-            name: "Shotgun".into(),
-            description: "High-damage spread weapons".into(),
-        },
-        WeaponTypeInfo {
-            code: "SM".into(),
-            name: "SMG".into(),
-            description: "Submachine guns".into(),
-        },
-        WeaponTypeInfo {
-            code: "SR".into(),
-            name: "Sniper Rifle".into(),
-            description: "Long-range precision weapons".into(),
-        },
-    ]
+    bl4::reference::WEAPON_TYPES
+        .iter()
+        .map(|w| WeaponTypeInfo {
+            code: w.code.to_string(),
+            name: w.name.to_string(),
+            description: w.description.to_string(),
+        })
+        .collect()
 }
 
-/// Extended manufacturer info (REFERENCE ONLY - not extracted from game)
+/// Extended manufacturer info (serializable wrapper for JSON output)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManufacturerInfo {
     pub code: String,
@@ -1878,108 +1649,20 @@ pub struct ManufacturerInfo {
     pub style: String,
 }
 
-/// WARNING: This is hardcoded reference data, NOT extracted from game files.
+/// Get manufacturer info from bl4::reference for JSON serialization
 pub fn manufacturer_info() -> Vec<ManufacturerInfo> {
-    vec![
-        ManufacturerInfo {
-            code: "BOR".into(),
-            name: "Borg".into(),
-            weapon_types: vec![
-                "smg".into(),
-                "shotgun".into(),
-                "heavy".into(),
-                "sniper".into(),
-            ],
-            style: "Cult/organic aesthetics".into(),
-        },
-        ManufacturerInfo {
-            code: "DAD".into(),
-            name: "Daedalus".into(),
-            weapon_types: vec![
-                "assaultrifle".into(),
-                "smg".into(),
-                "pistol".into(),
-                "shotgun".into(),
-            ],
-            style: "High-tech precision".into(),
-        },
-        ManufacturerInfo {
-            code: "JAK".into(),
-            name: "Jakobs".into(),
-            weapon_types: vec![
-                "assaultrifle".into(),
-                "pistol".into(),
-                "shotgun".into(),
-                "sniper".into(),
-            ],
-            style: "Old West, semi-auto, high damage per shot".into(),
-        },
-        ManufacturerInfo {
-            code: "MAL".into(),
-            name: "Maliwan".into(),
-            weapon_types: vec![
-                "smg".into(),
-                "shotgun".into(),
-                "sniper".into(),
-                "heavy".into(),
-            ],
-            style: "Elemental weapons, energy-based".into(),
-        },
-        ManufacturerInfo {
-            code: "ORD".into(),
-            name: "Order".into(),
-            weapon_types: vec!["assaultrifle".into(), "pistol".into(), "sniper".into()],
-            style: "Military precision".into(),
-        },
-        ManufacturerInfo {
-            code: "RIP".into(),
-            name: "Ripper".into(),
-            weapon_types: vec!["shotgun".into(), "sniper".into()],
-            style: "Aggressive, high-damage".into(),
-        },
-        ManufacturerInfo {
-            code: "TED".into(),
-            name: "Tediore".into(),
-            weapon_types: vec![
-                "assaultrifle".into(),
-                "pistol".into(),
-                "shotgun".into(),
-                "smg".into(),
-            ],
-            style: "Disposable, thrown on reload".into(),
-        },
-        ManufacturerInfo {
-            code: "TOR".into(),
-            name: "Torgue".into(),
-            weapon_types: vec![
-                "assaultrifle".into(),
-                "pistol".into(),
-                "shotgun".into(),
-                "heavy".into(),
-            ],
-            style: "Explosive/gyrojet rounds".into(),
-        },
-        ManufacturerInfo {
-            code: "VLA".into(),
-            name: "Vladof".into(),
-            weapon_types: vec![
-                "assaultrifle".into(),
-                "smg".into(),
-                "sniper".into(),
-                "heavy".into(),
-            ],
-            style: "High fire rate, large magazines".into(),
-        },
-        ManufacturerInfo {
-            code: "GRV".into(),
-            name: "Gravitar".into(),
-            weapon_types: vec![],
-            style: "Class mods manufacturer".into(),
-        },
-    ]
+    bl4::reference::MANUFACTURERS
+        .iter()
+        .map(|m| ManufacturerInfo {
+            code: m.code.to_string(),
+            name: m.name.to_string(),
+            weapon_types: m.weapon_types.iter().map(|s| s.to_string()).collect(),
+            style: m.style.to_string(),
+        })
+        .collect()
 }
 
-/// Gear type definitions (REFERENCE ONLY - not extracted from game)
+/// Gear type definitions (serializable wrapper for JSON output)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GearTypeInfo {
     pub code: String,
@@ -1987,40 +1670,16 @@ pub struct GearTypeInfo {
     pub description: String,
 }
 
-/// WARNING: This is hardcoded reference data, NOT extracted from game files.
+/// Get gear type info from bl4::reference for JSON serialization
 pub fn gear_type_info() -> Vec<GearTypeInfo> {
-    vec![
-        GearTypeInfo {
-            code: "shield".into(),
-            name: "Shield".into(),
-            description: "Defensive equipment".into(),
-        },
-        GearTypeInfo {
-            code: "classmod".into(),
-            name: "Class Mod".into(),
-            description: "Character class modifications".into(),
-        },
-        GearTypeInfo {
-            code: "enhancement".into(),
-            name: "Enhancement".into(),
-            description: "Permanent character upgrades".into(),
-        },
-        GearTypeInfo {
-            code: "gadget".into(),
-            name: "Gadget".into(),
-            description: "Deployable equipment".into(),
-        },
-        GearTypeInfo {
-            code: "repair_kit".into(),
-            name: "Repair Kit".into(),
-            description: "Healing items".into(),
-        },
-        GearTypeInfo {
-            code: "grenade".into(),
-            name: "Grenade".into(),
-            description: "Throwable explosive devices".into(),
-        },
-    ]
+    bl4::reference::GEAR_TYPES
+        .iter()
+        .map(|g| GearTypeInfo {
+            code: g.code.to_string(),
+            name: g.name.to_string(),
+            description: g.description.to_string(),
+        })
+        .collect()
 }
 
 // ============================================================================
