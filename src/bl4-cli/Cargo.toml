@@ -11,6 +11,10 @@ description = "Command-line tool for Borderlands 4 save editing"
 name = "bl4"
 path = "src/main.rs"
 
+[features]
+default = []
+research = ["dep:regex", "dep:walkdir", "dep:unreal_asset", "dep:chrono"]
+
 [dependencies]
 bl4 = { version = "0.3.0", path = "../bl4" }
 bl4-idb = { version = "0.3.0", path = "../bl4-idb", features = ["sqlite-sync", "attachments"] }
@@ -33,3 +37,9 @@ memchr = "2.7"
 # HTTP client for publishing
 ureq = { version = "2.10", features = ["json"] }
 urlencoding = "2.1"
+
+# Research feature dependencies (manifest generation)
+regex = { version = "1.10", optional = true }
+walkdir = { version = "2.4", optional = true }
+unreal_asset = { version = "0.1", optional = true }
+chrono = { version = "0.4", optional = true }

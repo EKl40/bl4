@@ -1,5 +1,7 @@
 mod config;
 mod file_io;
+#[cfg(feature = "research")]
+mod manifest;
 mod memory;
 
 use anyhow::{bail, Context, Result};
@@ -300,6 +302,34 @@ enum Commands {
 
         #[command(subcommand)]
         command: ItemsDbCommand,
+    },
+
+    /// Generate manifest files from game data (requires 'research' feature)
+    #[cfg(feature = "research")]
+    Manifest {
+        /// Path to game's Paks directory containing .utoc/.ucas files
+        #[arg(short, long)]
+        paks: PathBuf,
+
+        /// Path to .usmap file for property schema
+        #[arg(short = 'm', long)]
+        usmap: PathBuf,
+
+        /// Output directory for manifest files
+        #[arg(short, long, default_value = "share/manifest")]
+        output: PathBuf,
+
+        /// AES encryption key if paks are encrypted (base64 or hex)
+        #[arg(long)]
+        aes_key: Option<String>,
+
+        /// Skip uextract step (use existing extracted files)
+        #[arg(long)]
+        skip_extract: bool,
+
+        /// Path to existing extracted files (with --skip-extract)
+        #[arg(long, default_value = "/tmp/bl4_extract")]
+        extracted: PathBuf,
     },
 }
 
@@ -4038,6 +4068,48 @@ fn main() -> Result<()> {
         Commands::Idb { db, command } => {
             handle_items_db_command(command, &db)?;
         }
+
+        #[cfg(feature = "research")]
+        Commands::Manifest {
+            paks,
+            usmap,
+            output,
+            aes_key,
+            skip_extract,
+            extracted,
+        } => {
+            use std::process::Command as ProcessCommand;
+
+            let extract_dir = if skip_extract {
+                extracted
+            } else {
+                // Run uextract to extract pak files
+                println!("Extracting pak files with uextract...");
+                let mut cmd = ProcessCommand::new("uextract");
+                cmd.arg(&paks)
+                    .arg("-o")
+                    .arg(&extracted)
+                    .arg("--usmap")
+                    .arg(&usmap)
+                    .arg("--format")
+                    .arg("json");
+
+                if let Some(key) = &aes_key {
+                    cmd.arg("--aes-key").arg(key);
+                }
+
+                let status = cmd.status().context("Failed to run uextract")?;
+                if !status.success() {
+                    bail!("uextract failed with status: {}", status);
+                }
+                extracted
+            };
+
+            // Generate manifest from extracted files
+            println!("Generating manifest files...");
+            manifest::extract_manifest(&extract_dir, &output)?;
+            println!("Manifest files written to {}", output.display());
+        }
     }
 
     Ok(())
@@ -4121,7 +4193,12 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             let all_best_values = wdb.get_all_items_best_values()?;
 
             let default_fields = vec![
-                "serial", "manufacturer", "name", "weapon_type", "level", "element",
+                "serial",
+                "manufacturer",
+                "name",
+                "weapon_type",
+                "level",
+                "element",
             ];
             let field_list: Vec<&str> = fields
                 .as_ref()
@@ -4152,10 +4229,8 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                     }
                 }
                 OutputFormat::Table => {
-                    let col_widths: Vec<usize> = field_list
-                        .iter()
-                        .map(|f| field_display_width(f))
-                        .collect();
+                    let col_widths: Vec<usize> =
+                        field_list.iter().map(|f| field_display_width(f)).collect();
 
                     let header: String = field_list
                         .iter()
@@ -4199,7 +4274,10 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                 println!("Manufacturer: {}", w.manufacturer.as_deref().unwrap_or("-"));
                 println!("Type:         {}", w.weapon_type.as_deref().unwrap_or("-"));
                 println!("Rarity:       {}", w.rarity.as_deref().unwrap_or("-"));
-                println!("Level:        {}", w.level.map(|l| l.to_string()).unwrap_or("-".to_string()));
+                println!(
+                    "Level:        {}",
+                    w.level.map(|l| l.to_string()).unwrap_or("-".to_string())
+                );
                 println!("Element:      {}", w.element.as_deref().unwrap_or("-"));
                 println!("\n--- Metadata ---");
                 println!("Source:       {}", w.source.as_deref().unwrap_or("-"));
@@ -4211,7 +4289,12 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                 if !parts.is_empty() {
                     println!("\nParts:");
                     for p in parts {
-                        println!("  {} - {} ({})", p.slot, p.manufacturer.as_deref().unwrap_or("-"), p.effect.as_deref().unwrap_or("-"));
+                        println!(
+                            "  {} - {} ({})",
+                            p.slot,
+                            p.manufacturer.as_deref().unwrap_or("-"),
+                            p.effect.as_deref().unwrap_or("-")
+                        );
                     }
                 }
 
@@ -4227,13 +4310,29 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             }
         }
 
-        ItemsDbCommand::Attach { image, serial, name, popup, detail } => {
+        ItemsDbCommand::Attach {
+            image,
+            serial,
+            name,
+            popup,
+            detail,
+        } => {
             let wdb = bl4_idb::SqliteDb::open(db)?;
             wdb.init()?;
 
-            let view = if popup { "POPUP" } else if detail { "DETAIL" } else { "OTHER" };
+            let view = if popup {
+                "POPUP"
+            } else if detail {
+                "DETAIL"
+            } else {
+                "OTHER"
+            };
             let attachment_name = name.unwrap_or_else(|| {
-                image.file_stem().and_then(|n| n.to_str()).unwrap_or("unknown").to_string()
+                image
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string()
             });
             let mime_type = match image.extension().and_then(|e| e.to_str()) {
                 Some("png") => "image/png",
@@ -4242,8 +4341,12 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             };
 
             let data = std::fs::read(&image)?;
-            let attachment_id = wdb.add_attachment(&serial, &attachment_name, mime_type, &data, view)?;
-            println!("Added attachment '{}' (ID {}, view: {}) to item {}", attachment_name, attachment_id, view, serial);
+            let attachment_id =
+                wdb.add_attachment(&serial, &attachment_name, mime_type, &data, view)?;
+            println!(
+                "Added attachment '{}' (ID {}, view: {}) to item {}",
+                attachment_name, attachment_id, view, serial
+            );
         }
 
         ItemsDbCommand::Import { path } => {
@@ -4261,7 +4364,11 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                     if subdir.is_dir() && subdir.join("serial.txt").exists() {
                         match wdb.import_from_dir(&subdir) {
                             Ok(serial) => {
-                                println!("Imported {} ({})", subdir.file_name().unwrap_or_default().to_string_lossy(), &serial[..serial.len().min(30)]);
+                                println!(
+                                    "Imported {} ({})",
+                                    subdir.file_name().unwrap_or_default().to_string_lossy(),
+                                    &serial[..serial.len().min(30)]
+                                );
                                 imported += 1;
                             }
                             Err(e) => eprintln!("Failed to import {}: {}", subdir.display(), e),
@@ -4287,7 +4394,11 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             println!("  Attachments: {}", stats.attachment_count);
         }
 
-        ItemsDbCommand::Verify { serial, status, notes } => {
+        ItemsDbCommand::Verify {
+            serial,
+            status,
+            notes,
+        } => {
             let wdb = bl4_idb::SqliteDb::open(db)?;
             wdb.init()?;
             let status: bl4_idb::VerificationStatus = status.parse()?;
@@ -4317,13 +4428,17 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                                 .map(|(m, w)| (Some(m.to_string()), Some(w.to_string())))
                                 .unwrap_or((None, None))
                         } else if let Some(group_id) = decoded_item.part_group_id() {
-                            let cat_name = bl4::parts::category_name_for_type(decoded_item.item_type, group_id);
+                            let cat_name = bl4::parts::category_name_for_type(
+                                decoded_item.item_type,
+                                group_id,
+                            );
                             (None, cat_name.map(|s| s.to_string()))
                         } else {
                             (None, None)
                         };
 
-                        let level = decoded_item.level
+                        let level = decoded_item
+                            .level
                             .and_then(bl4::parts::level_from_code)
                             .map(|(capped, _raw)| capped as i32);
 
@@ -4337,7 +4452,11 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                         wdb.set_item_type(&item.serial, &decoded_item.item_type.to_string())?;
 
                         if item.verification_status == bl4_idb::VerificationStatus::Unverified {
-                            wdb.set_verification_status(&item.serial, bl4_idb::VerificationStatus::Decoded, None)?;
+                            wdb.set_verification_status(
+                                &item.serial,
+                                bl4_idb::VerificationStatus::Decoded,
+                                None,
+                            )?;
                         }
                         decoded += 1;
                     }
@@ -4347,11 +4466,19 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                     }
                 }
             }
-            println!("Decoded {} items, skipped {} (already decoded), {} failed", decoded, skipped, failed);
+            println!(
+                "Decoded {} items, skipped {} (already decoded), {} failed",
+                decoded, skipped, failed
+            );
         }
 
-        ItemsDbCommand::ImportSave { save, decode, legal } => {
-            let steam_id = save.to_string_lossy()
+        ItemsDbCommand::ImportSave {
+            save,
+            decode,
+            legal,
+        } => {
+            let steam_id = save
+                .to_string_lossy()
                 .split('/')
                 .find(|s| s.len() == 17 && s.chars().all(|c| c.is_ascii_digit()))
                 .map(String::from)
@@ -4367,7 +4494,11 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             serials.sort();
             serials.dedup();
 
-            println!("Found {} unique serials in {}", serials.len(), save.display());
+            println!(
+                "Found {} unique serials in {}",
+                serials.len(),
+                save.display()
+            );
 
             let wdb = bl4_idb::SqliteDb::open(db)?;
             wdb.init()?;
@@ -4388,15 +4519,20 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                 let mut decoded_count = 0;
 
                 for item in &items {
-                    if item.manufacturer.is_some() { continue; }
+                    if item.manufacturer.is_some() {
+                        continue;
+                    }
                     if let Ok(decoded_item) = bl4::ItemSerial::decode(&item.serial) {
                         let (mfg, wtype) = if let Some(mfg_id) = decoded_item.manufacturer {
                             bl4::parts::weapon_info_from_first_varint(mfg_id)
                                 .map(|(m, w)| (Some(m.to_string()), Some(w.to_string())))
                                 .unwrap_or((None, None))
-                        } else { (None, None) };
+                        } else {
+                            (None, None)
+                        };
 
-                        let level = decoded_item.level
+                        let level = decoded_item
+                            .level
                             .and_then(bl4::parts::level_from_code)
                             .map(|(capped, _)| capped as i32);
 
@@ -4409,7 +4545,11 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                         let _ = wdb.update_item(&item.serial, &update);
 
                         if item.verification_status == bl4_idb::VerificationStatus::Unverified {
-                            let _ = wdb.set_verification_status(&item.serial, bl4_idb::VerificationStatus::Decoded, None);
+                            let _ = wdb.set_verification_status(
+                                &item.serial,
+                                bl4_idb::VerificationStatus::Decoded,
+                                None,
+                            );
                         }
                         decoded_count += 1;
                     }
@@ -4448,7 +4588,11 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             }
         }
 
-        ItemsDbCommand::SetSource { source, ids, where_clause } => {
+        ItemsDbCommand::SetSource {
+            source,
+            ids,
+            where_clause,
+        } => {
             let wdb = bl4_idb::SqliteDb::open(db)?;
             wdb.init()?;
 
@@ -4457,7 +4601,10 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                 println!("Set source to '{}' for {} items", source, count);
             } else if ids.len() == 1 && ids[0] == "null" {
                 let count = wdb.set_source_for_null(&source)?;
-                println!("Set source to '{}' for {} items with no source", source, count);
+                println!(
+                    "Set source to '{}' for {} items with no source",
+                    source, count
+                );
             } else {
                 let mut updated = 0;
                 for serial in &ids {
@@ -4486,8 +4633,18 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             let source: bl4_idb::ValueSource = source.parse()?;
             let confidence: bl4_idb::Confidence = confidence.parse()?;
 
-            wdb.set_value(&serial, &field, &value, source, source_detail.as_deref(), confidence)?;
-            println!("Set {}.{} = {} (source: {}, confidence: {})", serial, field, value, source, confidence);
+            wdb.set_value(
+                &serial,
+                &field,
+                &value,
+                source,
+                source_detail.as_deref(),
+                confidence,
+            )?;
+            println!(
+                "Set {}.{} = {} (source: {}, confidence: {})",
+                serial, field, value, source, confidence
+            );
         }
 
         ItemsDbCommand::GetValues { serial, field } => {
@@ -4501,7 +4658,8 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             } else {
                 println!("Values for {}.{}:", serial, field);
                 for v in values {
-                    println!("  {} ({}, {}): {}",
+                    println!(
+                        "  {} ({}, {}): {}",
                         v.source,
                         v.confidence,
                         v.source_detail.as_deref().unwrap_or("-"),
@@ -4522,7 +4680,10 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             let stats = wdb.migrate_column_values(dry_run)?;
 
             println!();
-            println!("Migration {}:", if dry_run { "preview" } else { "complete" });
+            println!(
+                "Migration {}:",
+                if dry_run { "preview" } else { "complete" }
+            );
             println!("  Items processed: {}", stats.items_processed);
             println!("  Values migrated: {}", stats.values_migrated);
             println!("  Values skipped (already exist): {}", stats.values_skipped);
@@ -4562,7 +4723,9 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                         caps["attachments"].as_bool().unwrap_or(false)
                     }
                     Err(_) => {
-                        println!("Warning: Could not check server capabilities, skipping attachments");
+                        println!(
+                            "Warning: Could not check server capabilities, skipping attachments"
+                        );
                         false
                     }
                 }
@@ -4675,7 +4838,9 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
 
                         // View field
                         body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
-                        body.extend_from_slice(b"Content-Disposition: form-data; name=\"view\"\r\n\r\n");
+                        body.extend_from_slice(
+                            b"Content-Disposition: form-data; name=\"view\"\r\n\r\n",
+                        );
                         body.extend_from_slice(attachment.view.as_bytes());
                         body.extend_from_slice(b"\r\n");
 
@@ -4796,7 +4961,10 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                 }
                 println!("\n{} new items, {} existing", new_items, existing_items);
                 if authoritative {
-                    println!("With --authoritative, values for all {} items would be updated", all_items.len());
+                    println!(
+                        "With --authoritative, values for all {} items would be updated",
+                        all_items.len()
+                    );
                 } else {
                     println!("Without --authoritative, only new items would get values");
                 }
@@ -4897,7 +5065,9 @@ fn merge_databases(source: &std::path::Path, dest: &std::path::Path) -> Result<(
 
     #[allow(clippy::type_complexity)]
     let items: Vec<(i64, Option<String>, Option<String>, Option<String>)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
         .filter_map(|r| r.ok())
         .collect();
 
@@ -4907,22 +5077,35 @@ fn merge_databases(source: &std::path::Path, dest: &std::path::Path) -> Result<(
     for (id, name, tier, notes) in &items {
         if let Some(name) = name {
             if !name.is_empty() {
-                dest_conn.execute("UPDATE weapons SET name = ?1 WHERE id = ?2", params![name, id])?;
+                dest_conn.execute(
+                    "UPDATE weapons SET name = ?1 WHERE id = ?2",
+                    params![name, id],
+                )?;
             }
         }
         if let Some(tier) = tier {
-            dest_conn.execute("UPDATE weapons SET tier = ?1 WHERE id = ?2", params![tier, id])?;
+            dest_conn.execute(
+                "UPDATE weapons SET tier = ?1 WHERE id = ?2",
+                params![tier, id],
+            )?;
         }
         if let Some(notes) = notes {
             if !notes.is_empty() {
-                dest_conn.execute("UPDATE weapons SET notes = ?1 WHERE id = ?2", params![notes, id])?;
+                dest_conn.execute(
+                    "UPDATE weapons SET notes = ?1 WHERE id = ?2",
+                    params![notes, id],
+                )?;
             }
         }
         updated += 1;
     }
 
     println!("Merged {} items", updated);
-    let count: i64 = dest_conn.query_row("SELECT COUNT(*) FROM weapons WHERE tier IS NOT NULL", [], |row| row.get(0))?;
+    let count: i64 = dest_conn.query_row(
+        "SELECT COUNT(*) FROM weapons WHERE tier IS NOT NULL",
+        [],
+        |row| row.get(0),
+    )?;
     println!("Destination now has {} tiered items", count);
 
     Ok(())
@@ -5010,7 +5193,11 @@ fn filter_item_fields_with_overrides(
         let value = get_item_field_value_with_override(item, field, overrides);
         obj.insert(
             (*field).to_string(),
-            if value.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(value) },
+            if value.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(value)
+            },
         );
     }
     serde_json::Value::Object(obj)
@@ -5020,7 +5207,8 @@ fn filter_item_fields_with_overrides(
 fn field_display_width(field: &str) -> usize {
     match field {
         "serial" => 35,
-        other => other.parse::<bl4_idb::ItemField>()
+        other => other
+            .parse::<bl4_idb::ItemField>()
             .map(|f| f.display_width())
             .unwrap_or(15),
     }
