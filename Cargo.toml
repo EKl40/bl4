@@ -5,8 +5,10 @@ members = [
     "src/bl4-idb",
     "src/bl4-cli",
     "src/bl4-community",
-    "src/bl4-save-editor",
     "src/uextract",
+]
+exclude = [
+    "src/bl4-save-editor",
 ]
 
 [workspace.package]
