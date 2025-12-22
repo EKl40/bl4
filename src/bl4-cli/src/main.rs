@@ -907,7 +907,7 @@ enum ItemsDbCommand {
     /// Publish items to the community server
     Publish {
         /// Server URL
-        #[arg(long, short, default_value = "https://bl4.dev")]
+        #[arg(long, short, default_value = "https://items.bl4.dev")]
         server: String,
 
         /// Only publish a specific item
@@ -926,7 +926,7 @@ enum ItemsDbCommand {
     /// Pull items from a community server and merge into local database
     Pull {
         /// Server URL
-        #[arg(long, short, default_value = "https://bl4.dev")]
+        #[arg(long, short, default_value = "https://items.bl4.dev")]
         server: String,
 
         /// Prefer remote values over local values (overwrite existing)
