@@ -8,17 +8,13 @@ use std::collections::HashMap;
 /// Verification status for items
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum VerificationStatus {
+    #[default]
     Unverified,
     Decoded,
     Screenshot,
     Verified,
-}
-
-impl Default for VerificationStatus {
-    fn default() -> Self {
-        Self::Unverified
-    }
 }
 
 impl std::fmt::Display for VerificationStatus {
@@ -48,10 +44,12 @@ impl std::str::FromStr for VerificationStatus {
 /// Source of a field value
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ValueSource {
     /// Value shown in the game UI (highest priority)
     InGame = 3,
     /// Value extracted by our decoder
+    #[default]
     Decoder = 2,
     /// Value from a community tool (with source_detail naming it)
     CommunityTool = 1,
@@ -61,12 +59,6 @@ impl ValueSource {
     /// Priority for sorting (higher = prefer)
     pub fn priority(&self) -> u8 {
         *self as u8
-    }
-}
-
-impl Default for ValueSource {
-    fn default() -> Self {
-        Self::Decoder
     }
 }
 
@@ -95,10 +87,12 @@ impl std::str::FromStr for ValueSource {
 /// Confidence level for a value
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Confidence {
     /// Value has been verified (e.g., screenshot match)
     Verified = 3,
     /// Value is inferred but likely correct
+    #[default]
     Inferred = 2,
     /// Value is uncertain/experimental
     Uncertain = 1,
@@ -108,12 +102,6 @@ impl Confidence {
     /// Priority for sorting (higher = prefer)
     pub fn priority(&self) -> u8 {
         *self as u8
-    }
-}
-
-impl Default for Confidence {
-    fn default() -> Self {
-        Self::Inferred
     }
 }
 
@@ -386,33 +374,43 @@ pub enum ParseError {
 
 /// Helper to pick the best value from a collection based on source and confidence priority
 pub fn pick_best_value(values: impl IntoIterator<Item = ItemValue>) -> Option<ItemValue> {
-    values.into_iter().max_by(|a, b| {
-        match a.source.priority().cmp(&b.source.priority()) {
+    values
+        .into_iter()
+        .max_by(|a, b| match a.source.priority().cmp(&b.source.priority()) {
             std::cmp::Ordering::Equal => a.confidence.priority().cmp(&b.confidence.priority()),
             other => other,
-        }
-    })
+        })
 }
 
 /// Group values by field and pick best for each
-pub fn best_values_by_field(values: impl IntoIterator<Item = ItemValue>) -> HashMap<String, String> {
+pub fn best_values_by_field(
+    values: impl IntoIterator<Item = ItemValue>,
+) -> HashMap<String, String> {
     let mut best_by_field: HashMap<String, ItemValue> = HashMap::new();
 
     for value in values {
-        let dominated = best_by_field.get(&value.field).map(|existing| {
-            match value.source.priority().cmp(&existing.source.priority()) {
-                std::cmp::Ordering::Greater => true,
-                std::cmp::Ordering::Equal => value.confidence.priority() > existing.confidence.priority(),
-                std::cmp::Ordering::Less => false,
-            }
-        }).unwrap_or(true);
+        let dominated = best_by_field
+            .get(&value.field)
+            .map(
+                |existing| match value.source.priority().cmp(&existing.source.priority()) {
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Equal => {
+                        value.confidence.priority() > existing.confidence.priority()
+                    }
+                    std::cmp::Ordering::Less => false,
+                },
+            )
+            .unwrap_or(true);
 
         if dominated {
             best_by_field.insert(value.field.clone(), value);
         }
     }
 
-    best_by_field.into_iter().map(|(k, v)| (k, v.value)).collect()
+    best_by_field
+        .into_iter()
+        .map(|(k, v)| (k, v.value))
+        .collect()
 }
 
 #[cfg(test)]
@@ -421,10 +419,22 @@ mod tests {
 
     #[test]
     fn test_verification_status_parse() {
-        assert_eq!("unverified".parse::<VerificationStatus>().unwrap(), VerificationStatus::Unverified);
-        assert_eq!("decoded".parse::<VerificationStatus>().unwrap(), VerificationStatus::Decoded);
-        assert_eq!("screenshot".parse::<VerificationStatus>().unwrap(), VerificationStatus::Screenshot);
-        assert_eq!("verified".parse::<VerificationStatus>().unwrap(), VerificationStatus::Verified);
+        assert_eq!(
+            "unverified".parse::<VerificationStatus>().unwrap(),
+            VerificationStatus::Unverified
+        );
+        assert_eq!(
+            "decoded".parse::<VerificationStatus>().unwrap(),
+            VerificationStatus::Decoded
+        );
+        assert_eq!(
+            "screenshot".parse::<VerificationStatus>().unwrap(),
+            VerificationStatus::Screenshot
+        );
+        assert_eq!(
+            "verified".parse::<VerificationStatus>().unwrap(),
+            VerificationStatus::Verified
+        );
         assert!("invalid".parse::<VerificationStatus>().is_err());
     }
 
@@ -438,11 +448,26 @@ mod tests {
 
     #[test]
     fn test_value_source_parse() {
-        assert_eq!("ingame".parse::<ValueSource>().unwrap(), ValueSource::InGame);
-        assert_eq!("in_game".parse::<ValueSource>().unwrap(), ValueSource::InGame);
-        assert_eq!("decoder".parse::<ValueSource>().unwrap(), ValueSource::Decoder);
-        assert_eq!("community_tool".parse::<ValueSource>().unwrap(), ValueSource::CommunityTool);
-        assert_eq!("community".parse::<ValueSource>().unwrap(), ValueSource::CommunityTool);
+        assert_eq!(
+            "ingame".parse::<ValueSource>().unwrap(),
+            ValueSource::InGame
+        );
+        assert_eq!(
+            "in_game".parse::<ValueSource>().unwrap(),
+            ValueSource::InGame
+        );
+        assert_eq!(
+            "decoder".parse::<ValueSource>().unwrap(),
+            ValueSource::Decoder
+        );
+        assert_eq!(
+            "community_tool".parse::<ValueSource>().unwrap(),
+            ValueSource::CommunityTool
+        );
+        assert_eq!(
+            "community".parse::<ValueSource>().unwrap(),
+            ValueSource::CommunityTool
+        );
         assert!("invalid".parse::<ValueSource>().is_err());
     }
 
@@ -461,9 +486,18 @@ mod tests {
 
     #[test]
     fn test_confidence_parse() {
-        assert_eq!("verified".parse::<Confidence>().unwrap(), Confidence::Verified);
-        assert_eq!("inferred".parse::<Confidence>().unwrap(), Confidence::Inferred);
-        assert_eq!("uncertain".parse::<Confidence>().unwrap(), Confidence::Uncertain);
+        assert_eq!(
+            "verified".parse::<Confidence>().unwrap(),
+            Confidence::Verified
+        );
+        assert_eq!(
+            "inferred".parse::<Confidence>().unwrap(),
+            Confidence::Inferred
+        );
+        assert_eq!(
+            "uncertain".parse::<Confidence>().unwrap(),
+            Confidence::Uncertain
+        );
         assert!("invalid".parse::<Confidence>().is_err());
     }
 
@@ -484,9 +518,18 @@ mod tests {
     fn test_item_field_parse() {
         assert_eq!("name".parse::<ItemField>().unwrap(), ItemField::Name);
         assert_eq!("prefix".parse::<ItemField>().unwrap(), ItemField::Prefix);
-        assert_eq!("manufacturer".parse::<ItemField>().unwrap(), ItemField::Manufacturer);
-        assert_eq!("weapon_type".parse::<ItemField>().unwrap(), ItemField::WeaponType);
-        assert_eq!("item_type".parse::<ItemField>().unwrap(), ItemField::ItemType);
+        assert_eq!(
+            "manufacturer".parse::<ItemField>().unwrap(),
+            ItemField::Manufacturer
+        );
+        assert_eq!(
+            "weapon_type".parse::<ItemField>().unwrap(),
+            ItemField::WeaponType
+        );
+        assert_eq!(
+            "item_type".parse::<ItemField>().unwrap(),
+            ItemField::ItemType
+        );
         assert_eq!("rarity".parse::<ItemField>().unwrap(), ItemField::Rarity);
         assert_eq!("level".parse::<ItemField>().unwrap(), ItemField::Level);
         assert_eq!("element".parse::<ItemField>().unwrap(), ItemField::Element);
@@ -499,7 +542,12 @@ mod tests {
         assert_eq!(ItemField::WeaponType.to_string(), "weapon_type");
     }
 
-    fn make_value(field: &str, value: &str, source: ValueSource, confidence: Confidence) -> ItemValue {
+    fn make_value(
+        field: &str,
+        value: &str,
+        source: ValueSource,
+        confidence: Confidence,
+    ) -> ItemValue {
         ItemValue {
             id: 0,
             item_serial: String::new(),
@@ -515,9 +563,24 @@ mod tests {
     #[test]
     fn test_pick_best_value_by_source() {
         let values = vec![
-            make_value("name", "Community Name", ValueSource::CommunityTool, Confidence::Verified),
-            make_value("name", "Decoder Name", ValueSource::Decoder, Confidence::Verified),
-            make_value("name", "InGame Name", ValueSource::InGame, Confidence::Verified),
+            make_value(
+                "name",
+                "Community Name",
+                ValueSource::CommunityTool,
+                Confidence::Verified,
+            ),
+            make_value(
+                "name",
+                "Decoder Name",
+                ValueSource::Decoder,
+                Confidence::Verified,
+            ),
+            make_value(
+                "name",
+                "InGame Name",
+                ValueSource::InGame,
+                Confidence::Verified,
+            ),
         ];
         let best = pick_best_value(values).unwrap();
         assert_eq!(best.value, "InGame Name");
@@ -527,9 +590,24 @@ mod tests {
     #[test]
     fn test_pick_best_value_by_confidence() {
         let values = vec![
-            make_value("name", "Uncertain", ValueSource::Decoder, Confidence::Uncertain),
-            make_value("name", "Verified", ValueSource::Decoder, Confidence::Verified),
-            make_value("name", "Inferred", ValueSource::Decoder, Confidence::Inferred),
+            make_value(
+                "name",
+                "Uncertain",
+                ValueSource::Decoder,
+                Confidence::Uncertain,
+            ),
+            make_value(
+                "name",
+                "Verified",
+                ValueSource::Decoder,
+                Confidence::Verified,
+            ),
+            make_value(
+                "name",
+                "Inferred",
+                ValueSource::Decoder,
+                Confidence::Inferred,
+            ),
         ];
         let best = pick_best_value(values).unwrap();
         assert_eq!(best.value, "Verified");
@@ -540,8 +618,18 @@ mod tests {
     fn test_pick_best_value_source_over_confidence() {
         // InGame with Uncertain should beat Decoder with Verified
         let values = vec![
-            make_value("name", "Decoder Verified", ValueSource::Decoder, Confidence::Verified),
-            make_value("name", "InGame Uncertain", ValueSource::InGame, Confidence::Uncertain),
+            make_value(
+                "name",
+                "Decoder Verified",
+                ValueSource::Decoder,
+                Confidence::Verified,
+            ),
+            make_value(
+                "name",
+                "InGame Uncertain",
+                ValueSource::InGame,
+                Confidence::Uncertain,
+            ),
         ];
         let best = pick_best_value(values).unwrap();
         assert_eq!(best.value, "InGame Uncertain");
@@ -556,8 +644,18 @@ mod tests {
     #[test]
     fn test_best_values_by_field() {
         let values = vec![
-            make_value("name", "Bad Name", ValueSource::CommunityTool, Confidence::Uncertain),
-            make_value("name", "Good Name", ValueSource::InGame, Confidence::Verified),
+            make_value(
+                "name",
+                "Bad Name",
+                ValueSource::CommunityTool,
+                Confidence::Uncertain,
+            ),
+            make_value(
+                "name",
+                "Good Name",
+                ValueSource::InGame,
+                Confidence::Verified,
+            ),
             make_value("level", "50", ValueSource::Decoder, Confidence::Inferred),
             make_value("level", "51", ValueSource::InGame, Confidence::Verified),
         ];

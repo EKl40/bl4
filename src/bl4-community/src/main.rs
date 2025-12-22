@@ -11,7 +11,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use bl4_idb::{AsyncAttachmentsRepository, AsyncItemsRepository, Confidence, ItemFilter, SqlxSqliteDb, ValueSource};
+use bl4_idb::{
+    AsyncAttachmentsRepository, AsyncItemsRepository, Confidence, ItemFilter, SqlxSqliteDb,
+    ValueSource,
+};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use tower_http::{
@@ -456,7 +459,11 @@ async fn upload_attachment(
                 if data.len() > MAX_ATTACHMENT_SIZE {
                     return Err((
                         StatusCode::PAYLOAD_TOO_LARGE,
-                        format!("File too large: {} bytes (max {})", data.len(), MAX_ATTACHMENT_SIZE),
+                        format!(
+                            "File too large: {} bytes (max {})",
+                            data.len(),
+                            MAX_ATTACHMENT_SIZE
+                        ),
                     ));
                 }
 
@@ -481,7 +488,10 @@ async fn upload_attachment(
 
     // Validate mime type (only images)
     if !mime.starts_with("image/") {
-        return Err((StatusCode::BAD_REQUEST, "Only image files are allowed".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Only image files are allowed".to_string(),
+        ));
     }
 
     let id = state
@@ -714,13 +724,13 @@ async fn decode_serial(
         .map(|(capped, _)| capped as u32);
 
     let rarity = item.rarity_name().map(String::from);
-    let element = item.element_names().map(String::from);
+    let element = item.element_names();
 
     let parts: Vec<PartInfo> = item
         .parts()
         .iter()
         .map(|(idx, _bits)| {
-            let cat_id = bl4::parts::serial_id_to_parts_category(*idx as u64);
+            let cat_id = bl4::parts::serial_id_to_parts_category(*idx);
             let category = bl4::parts::category_name(cat_id as i64).map(String::from);
 
             PartInfo {

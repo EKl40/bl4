@@ -910,7 +910,12 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
 
             // Default fields if none specified
             let default_fields = vec![
-                "serial", "manufacturer", "name", "weapon_type", "level", "element",
+                "serial",
+                "manufacturer",
+                "name",
+                "weapon_type",
+                "level",
+                "element",
             ];
             let field_list: Vec<&str> = fields
                 .as_ref()
@@ -1124,7 +1129,8 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             };
 
             let data = std::fs::read(&image)?;
-            let attachment_id = wdb.add_attachment(&serial, &attachment_name, mime_type, &data, &view)?;
+            let attachment_id =
+                wdb.add_attachment(&serial, &attachment_name, mime_type, &data, view)?;
             println!(
                 "Added attachment '{}' (ID {}, view: {}) to item {}",
                 attachment_name, attachment_id, view, serial
@@ -1139,11 +1145,7 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             if path.join("serial.txt").exists() {
                 // Single weapon directory
                 let serial = wdb.import_from_dir(&path)?;
-                println!(
-                    "Imported item {} from {}",
-                    serial,
-                    path.display()
-                );
+                println!("Imported item {} from {}", serial, path.display());
             } else {
                 // Parent directory - import all subdirectories
                 let mut imported = 0;
@@ -1585,8 +1587,14 @@ fn get_item_field_value(item: &items::Item, field: &str) -> String {
         "dps" => item.dps.map(|v| v.to_string()).unwrap_or_default(),
         "damage" => item.damage.map(|v| v.to_string()).unwrap_or_default(),
         "accuracy" => item.accuracy.map(|v| v.to_string()).unwrap_or_default(),
-        "fire_rate" => item.fire_rate.map(|v| format!("{:.2}", v)).unwrap_or_default(),
-        "reload_time" => item.reload_time.map(|v| format!("{:.2}", v)).unwrap_or_default(),
+        "fire_rate" => item
+            .fire_rate
+            .map(|v| format!("{:.2}", v))
+            .unwrap_or_default(),
+        "reload_time" => item
+            .reload_time
+            .map(|v| format!("{:.2}", v))
+            .unwrap_or_default(),
         "mag_size" => item.mag_size.map(|v| v.to_string()).unwrap_or_default(),
         "value" => item.value.map(|v| v.to_string()).unwrap_or_default(),
         "red_text" => item.red_text.clone().unwrap_or_default(),

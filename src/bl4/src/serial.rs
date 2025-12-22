@@ -9,8 +9,8 @@
 //! 4. Data is a variable-length bitstream with tokens
 
 use crate::parts::{
-    item_type_name, level_from_code, manufacturer_name, serial_format,
-    serial_id_to_parts_category, weapon_info_from_first_varint,
+    item_type_name, level_from_code, manufacturer_name, serial_format, serial_id_to_parts_category,
+    weapon_info_from_first_varint,
 };
 
 /// Custom Base85 alphabet used by Borderlands 4
@@ -20,12 +20,12 @@ const BL4_BASE85_ALPHABET: &[u8; 85] =
 /// Element types for weapons
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Element {
-    Kinetic,    // ID 0
-    Corrosive,  // ID 5
-    Shock,      // ID 8
-    Radiation,  // ID 9
-    Cryo,       // ID 13
-    Fire,       // ID 14
+    Kinetic,   // ID 0
+    Corrosive, // ID 5
+    Shock,     // ID 8
+    Radiation, // ID 9
+    Cryo,      // ID 13
+    Fire,      // ID 14
 }
 
 impl Element {
@@ -87,8 +87,8 @@ impl Rarity {
         let rarity_bits = (remainder >> 6) & 0x3;
         match rarity_bits {
             0 => Some(Rarity::Common),
-            1 => Some(Rarity::Epic), // Observed: 64 >> 6 = 1 for Epic
-            2 => Some(Rarity::Rare), // Hypothetical
+            1 => Some(Rarity::Epic),      // Observed: 64 >> 6 = 1 for Epic
+            2 => Some(Rarity::Rare),      // Hypothetical
             3 => Some(Rarity::Legendary), // Observed: 192 >> 6 = 3 for Legendary
             _ => None,
         }
@@ -342,15 +342,27 @@ fn decode_base85(input: &str) -> Result<Vec<u8>, SerialError> {
     for chunk in chars.chunks(5) {
         let mut value: u64 = 0;
 
+        // For partial chunks, pad with highest value (84 = 'u') to make 5 chars
+        // This ensures we decode to the most significant bytes
         for &ch in chunk.iter() {
             let byte_val = lookup[ch as usize] as u64;
             value = value * 85 + byte_val;
         }
+        // Pad remaining positions with 84 (highest value)
+        for _ in chunk.len()..5 {
+            value = value * 85 + 84;
+        }
 
-        // Convert to big-endian bytes (most significant first)
+        // Extract bytes from most significant first
         let num_bytes = if chunk.len() == 5 { 4 } else { chunk.len() - 1 };
         for i in (0..num_bytes).rev() {
-            result.push(((value >> (i * 8)) & 0xFF) as u8);
+            // For partial chunks, extract from high bytes (shift by 24, 16, etc.)
+            let shift = if chunk.len() == 5 {
+                i * 8
+            } else {
+                (3 - (num_bytes - 1 - i)) * 8
+            };
+            result.push(((value >> shift) & 0xFF) as u8);
         }
     }
 
@@ -370,27 +382,26 @@ fn encode_base85(bytes: &[u8]) -> String {
 
     // Process in chunks of 4 bytes -> 5 characters
     for chunk in bytes.chunks(4) {
-        // Build value from bytes (big-endian)
+        // Build value from bytes (big-endian), pad with zeros to 4 bytes
         let mut value: u64 = 0;
         for &byte in chunk {
             value = (value << 8) | (byte as u64);
         }
-
-        // Pad if chunk is smaller than 4 bytes
+        // Pad partial chunks with zeros (shift left to fill 4 bytes)
         if chunk.len() < 4 {
             value <<= (4 - chunk.len()) * 8;
         }
 
-        // Convert to base85 (5 characters for 4 bytes, less for smaller chunks)
-        let num_chars = if chunk.len() == 4 { 5 } else { chunk.len() + 1 };
-        let mut chars = vec![0u8; num_chars];
-
-        for i in (0..num_chars).rev() {
+        // Convert to 5 base85 chars, then take first N+1 for partial chunks
+        let mut chars = [0u8; 5];
+        for i in (0..5).rev() {
             chars[i] = BL4_BASE85_ALPHABET[(value % 85) as usize];
             value /= 85;
         }
 
-        for &ch in &chars {
+        // Take first N+1 chars for partial chunks
+        let num_chars = if chunk.len() == 4 { 5 } else { chunk.len() + 1 };
+        for &ch in &chars[0..num_chars] {
             result.push(ch as char);
         }
     }
@@ -766,7 +777,10 @@ impl ItemSerial {
                         seen_first_sep = true;
                     }
                     Token::VarBit(v) if seen_first_sep && level.is_none() => {
-                        if let Some((capped, raw)) = level_from_code(*v) {
+                        // Equipment levels are 0-indexed in storage, add 1 for display
+                        // Verified: all /)}} items (level 50) have VarBit=49
+                        let adjusted = v.saturating_add(1);
+                        if let Some((capped, raw)) = level_from_code(adjusted) {
                             level = Some(capped as u64);
                             raw_level = Some(raw as u64);
                         }
@@ -1212,24 +1226,99 @@ mod tests {
 
     #[test]
     fn test_equipment_level_extraction() {
-        // Shield type-e at level 49
+        // Shield type-e with VarBit 49 = Level 50 (0-indexed storage)
         let item = ItemSerial::decode("@Uge98>m/)}}!c5JeNWCvCXc7").unwrap();
-        assert_eq!(item.level, Some(49));
-
-        // Grenade at level 49
-        let item = ItemSerial::decode("@Uge8Xtm/)}}!elF;NmXinbwH6?9}OPi1ON").unwrap();
-        assert_eq!(item.level, Some(49));
-
-        // Class mod at level 50
-        let item = ItemSerial::decode("@Uge8;)m/)@{!X>!SqTZJibf`hSk4B2r6#)").unwrap();
         assert_eq!(item.level, Some(50));
 
-        // Shield type-r at level 49
+        // Grenade with VarBit 49 = Level 50
+        let item = ItemSerial::decode("@Uge8Xtm/)}}!elF;NmXinbwH6?9}OPi1ON").unwrap();
+        assert_eq!(item.level, Some(50));
+
+        // Class mod with VarBit 50 = Level 51 (invalid, returns None)
+        let item = ItemSerial::decode("@Uge8;)m/)@{!X>!SqTZJibf`hSk4B2r6#)").unwrap();
+        assert_eq!(item.level, None);
+
+        // Shield type-r with VarBit 49 = Level 50
         let item = ItemSerial::decode("@Ugr$)Nm/%P$!bIqxL{(~iG&p36L=sIx00").unwrap();
-        assert_eq!(item.level, Some(49));
+        assert_eq!(item.level, Some(50));
 
         // Weapon still works - level 30
         let item = ItemSerial::decode("@Ugb)KvFg_4rJ}%H-RG}IbsZG^E#X_Y-00").unwrap();
         assert_eq!(item.level, Some(30));
+    }
+
+    #[test]
+    fn test_encode_roundtrip() {
+        // Test that decode -> encode produces the original serial
+        let test_serials = [
+            // Hellwalker (Fire shotgun)
+            "@Ugd_t@FmVuJyjIXzRG}JG7S$K^1{DjH5&-",
+            // Jakobs Pistol (Corrosive)
+            "@UgbV{rFjEj=bZ<~-RG}KRs7TF2b*c{P7OEuz",
+            // Energy Shield
+            "@Uge98>m/)}}!c5JeNWCvCXc7",
+            // Class Mod
+            "@Ug!pHG2}TYgjMfjzn~K!T)XUVX)U4Eu)Qi+?RPAVZh!@!b00",
+            // Grenade
+            "@Ugr$N8m/)}}!q9r4K/ShxuK@",
+        ];
+
+        for serial in test_serials {
+            let item = ItemSerial::decode(serial).unwrap();
+            let re_encoded = item.encode();
+            assert_eq!(
+                re_encoded, serial,
+                "Round-trip failed for {}: got {}",
+                serial, re_encoded
+            );
+        }
+    }
+
+    #[test]
+    fn test_element_from_id() {
+        // Verify element ID mapping
+        assert_eq!(Element::from_id(0), Some(Element::Kinetic));
+        assert_eq!(Element::from_id(5), Some(Element::Corrosive));
+        assert_eq!(Element::from_id(8), Some(Element::Shock));
+        assert_eq!(Element::from_id(9), Some(Element::Radiation));
+        assert_eq!(Element::from_id(13), Some(Element::Cryo));
+        assert_eq!(Element::from_id(14), Some(Element::Fire));
+        assert_eq!(Element::from_id(99), None); // Unknown ID
+    }
+
+    #[test]
+    fn test_element_names() {
+        assert_eq!(Element::Kinetic.name(), "Kinetic");
+        assert_eq!(Element::Corrosive.name(), "Corrosive");
+        assert_eq!(Element::Shock.name(), "Shock");
+        assert_eq!(Element::Radiation.name(), "Radiation");
+        assert_eq!(Element::Cryo.name(), "Cryo");
+        assert_eq!(Element::Fire.name(), "Fire");
+    }
+
+    #[test]
+    fn test_element_extraction_fire() {
+        // Hellwalker (Fire shotgun) - verified in-game
+        let item = ItemSerial::decode("@Ugd_t@FmVuJyjIXzRG}JG7S$K^1{DjH5&-").unwrap();
+        assert_eq!(item.elements.len(), 1);
+        assert_eq!(item.elements[0], Element::Fire);
+        assert_eq!(item.element_names(), Some("Fire".to_string()));
+    }
+
+    #[test]
+    fn test_element_extraction_corrosive() {
+        // Jakobs Pistol (Corrosive)
+        let item = ItemSerial::decode("@UgbV{rFjEj=bZ<~-RG}KRs7TF2b*c{P7OEuz").unwrap();
+        assert_eq!(item.elements.len(), 1);
+        assert_eq!(item.elements[0], Element::Corrosive);
+        assert_eq!(item.element_names(), Some("Corrosive".to_string()));
+    }
+
+    #[test]
+    fn test_element_extraction_none() {
+        // Energy Shield - no weapon element
+        let item = ItemSerial::decode("@Uge98>m/)}}!c5JeNWCvCXc7").unwrap();
+        assert!(item.elements.is_empty());
+        assert_eq!(item.element_names(), None);
     }
 }
