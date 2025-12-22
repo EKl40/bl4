@@ -27,6 +27,6 @@ anyhow = { workspace = true, optional = true }
 # Sync SQLite (CLI)
 rusqlite = { workspace = true, optional = true }
 
-# Async SQLx (server)
-sqlx = { version = "0.8", features = ["runtime-tokio", "macros"], optional = true }
+# Async SQLx (server) - 0.9 alpha for libsqlite3-sys compatibility with Servo
+sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "macros"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
