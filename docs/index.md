@@ -109,4 +109,4 @@ Each chapter includes:
 
 ---
 
-*For the latest version of this guide, visit [bl4.dev](https://bl4.dev)*
+*For the latest version of this guide, visit [book.bl4.dev](https://book.bl4.dev)*
