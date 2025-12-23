@@ -819,6 +819,7 @@ name = "bl4-idb"
 version = "0.5.7"
 dependencies = [
  "anyhow",
+ "chrono",
  "hex",
  "rand 0.8.5",
  "rusqlite",
@@ -8930,6 +8931,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "cfg-if",
+ "chrono",
  "crc",
  "crossbeam-queue",
  "either",
@@ -9005,6 +9007,7 @@ dependencies = [
  "bitflags 2.10.0",
  "byteorder",
  "bytes",
+ "chrono",
  "crc",
  "digest",
  "dotenvy",
@@ -9045,6 +9048,7 @@ dependencies = [
  "base64 0.22.1",
  "bitflags 2.10.0",
  "byteorder",
+ "chrono",
  "crc",
  "dotenvy",
  "etcetera",
@@ -9078,6 +9082,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe2cd6cee87120b1e1dd31356b5589911995c777707e49f2750eec7c7fe43eef"
 dependencies = [
  "atoi",
+ "chrono",
  "flume",
  "futures-channel",
  "futures-core",

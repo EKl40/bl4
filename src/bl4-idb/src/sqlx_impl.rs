@@ -899,7 +899,8 @@ pub mod postgres {
                 legal: row.try_get::<Option<bool>, _>("legal")?.unwrap_or(false),
                 source: row.try_get("source")?,
                 created_at: row
-                    .try_get::<Option<String>, _>("created_at")?
+                    .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("created_at")?
+                    .map(|dt| dt.to_rfc3339())
                     .unwrap_or_default(),
             })
         }
@@ -917,7 +918,8 @@ pub mod postgres {
                 source_detail: row.try_get("source_detail")?,
                 confidence: confidence_str.parse().unwrap_or(Confidence::Uncertain),
                 created_at: row
-                    .try_get::<Option<String>, _>("created_at")?
+                    .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("created_at")?
+                    .map(|dt| dt.to_rfc3339())
                     .unwrap_or_default(),
             })
         }

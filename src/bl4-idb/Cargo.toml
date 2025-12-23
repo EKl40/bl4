@@ -10,8 +10,8 @@ description = "Items database library for Borderlands 4 save editor"
 [features]
 default = ["sqlite-sync"]
 sqlite-sync = ["rusqlite", "anyhow"]
-sqlx-sqlite = ["sqlx/sqlite", "tokio"]
-sqlx-postgres = ["sqlx/postgres", "tokio"]
+sqlx-sqlite = ["sqlx/sqlite", "tokio", "chrono"]
+sqlx-postgres = ["sqlx/postgres", "tokio", "chrono"]
 # Enable screenshot/image attachment storage
 attachments = []
 
@@ -28,8 +28,9 @@ anyhow = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 
 # Async SQLx (server) - 0.9 alpha for libsqlite3-sys compatibility with Servo
-sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "macros"], optional = true }
+sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "macros", "chrono"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
+chrono = { version = "0.4", optional = true }
 
 # Hashing and UUIDs for source anonymization
 sha2 = "0.10"
