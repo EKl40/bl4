@@ -1115,7 +1115,8 @@ pub mod postgres {
             let fields: Vec<String> = values.iter().map(|(_, f, _, _, _)| f.to_string()).collect();
             let vals: Vec<String> = values.iter().map(|(_, _, v, _, _)| v.to_string()).collect();
             let sources: Vec<String> = values.iter().map(|(_, _, _, s, _)| s.to_string()).collect();
-            let confidences: Vec<String> = values.iter().map(|(_, _, _, _, c)| c.to_string()).collect();
+            let confidences: Vec<String> =
+                values.iter().map(|(_, _, _, _, c)| c.to_string()).collect();
 
             sqlx::query(
                 r#"

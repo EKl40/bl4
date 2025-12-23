@@ -5385,21 +5385,21 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             }
 
             // Bulk fetch all item_values (1 query)
-            let serials_for_values: Vec<&str> =
-                items.iter().map(|i| i.serial.as_str()).collect();
+            let serials_for_values: Vec<&str> = items.iter().map(|i| i.serial.as_str()).collect();
             let all_values = wdb.get_all_values_bulk(&serials_for_values)?;
 
             // Group values by serial for quick lookup
             let mut values_by_serial: std::collections::HashMap<&str, Vec<&bl4_idb::ItemValue>> =
                 std::collections::HashMap::new();
             for v in &all_values {
-                values_by_serial
-                    .entry(&v.item_serial)
-                    .or_default()
-                    .push(v);
+                values_by_serial.entry(&v.item_serial).or_default().push(v);
             }
 
-            println!("  Values: {} total across {} items", all_values.len(), values_by_serial.len());
+            println!(
+                "  Values: {} total across {} items",
+                all_values.len(),
+                values_by_serial.len()
+            );
 
             // Group items by source for separate batch UUIDs on server
             let mut groups: std::collections::HashMap<String, Vec<&bl4_idb::Item>> =

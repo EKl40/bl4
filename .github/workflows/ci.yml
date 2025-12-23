@@ -14,6 +14,22 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     environment: build
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bl4
+          POSTGRES_PASSWORD: bl4dev
+          POSTGRES_DB: bl4_items
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://bl4:bl4dev@localhost:5432/bl4_items
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +56,9 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace --exclude bl4-save-editor
+
+      - name: Test PostgreSQL migrations
+        run: cargo test -p bl4-idb --features sqlx-postgres test_postgres_migrations -- --ignored
 
       - name: Check formatting
         run: cargo fmt --all -- --check

@@ -174,7 +174,10 @@ impl Database {
         }
     }
 
-    async fn add_items_bulk(&self, serials: &[&str]) -> Result<bl4_idb::AsyncBulkResult, bl4_idb::RepoError> {
+    async fn add_items_bulk(
+        &self,
+        serials: &[&str],
+    ) -> Result<bl4_idb::AsyncBulkResult, bl4_idb::RepoError> {
         use bl4_idb::AsyncBulkRepository;
         match self {
             Database::Sqlite(db) => db.add_items_bulk(serials).await,
@@ -708,8 +711,12 @@ async fn upload_attachment(
     }
 
     // Resize image if wider than MAX_IMAGE_WIDTH
-    let (final_data, final_mime) = resize_image_if_needed(&data, &mime)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Failed to process image: {}", e)))?;
+    let (final_data, final_mime) = resize_image_if_needed(&data, &mime).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Failed to process image: {}", e),
+        )
+    })?;
 
     let id = state
         .db
