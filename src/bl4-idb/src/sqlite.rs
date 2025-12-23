@@ -126,6 +126,57 @@ impl SqliteDb {
         println!("Migration complete.");
         Ok(())
     }
+
+    /// Get a setting value
+    pub fn get_setting(&self, key: &str) -> RepoResult<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(RepoError::Database(e.to_string())),
+        }
+    }
+
+    /// Set a setting value
+    pub fn set_setting(&self, key: &str, value: &str) -> RepoResult<()> {
+        self.conn
+            .execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Get the source salt, generating one if it doesn't exist
+    pub fn get_or_create_salt(&self) -> RepoResult<String> {
+        if let Some(salt) = self.get_setting("source_salt")? {
+            Ok(salt)
+        } else {
+            let salt = crate::generate_salt();
+            self.set_setting("source_salt", &salt)?;
+            Ok(salt)
+        }
+    }
+
+    /// Get all distinct sources from the database
+    pub fn get_distinct_sources(&self) -> RepoResult<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT source FROM weapons WHERE source IS NOT NULL")
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+        let sources = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| RepoError::Database(e.to_string()))?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+        Ok(sources)
+    }
 }
 
 impl ItemsRepository for SqliteDb {
@@ -208,6 +259,11 @@ impl ItemsRepository for SqliteDb {
                 confidence TEXT NOT NULL DEFAULT 'inferred',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(item_serial, field, source)
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_weapons_name ON weapons(name);

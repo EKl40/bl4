@@ -802,6 +802,9 @@ enum ItemsDbCommand {
     /// Show database statistics
     Stats,
 
+    /// Show the source salt (generates one if missing)
+    Salt,
+
     /// Set verification status for an item
     Verify {
         /// Item serial
@@ -4898,6 +4901,13 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             println!("  Items:       {}", stats.item_count);
             println!("  Parts:       {}", stats.part_count);
             println!("  Attachments: {}", stats.attachment_count);
+        }
+
+        ItemsDbCommand::Salt => {
+            let wdb = bl4_idb::SqliteDb::open(db)?;
+            wdb.init()?;
+            let salt = wdb.get_or_create_salt()?;
+            println!("{}", salt);
         }
 
         ItemsDbCommand::Verify {
