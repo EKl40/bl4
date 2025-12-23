@@ -46,16 +46,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            ext: ''
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            ext: '.exe'
+            cross: false
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            cross: true
           - os: macos-latest
             target: x86_64-apple-darwin
-            ext: ''
+            cross: false
           - os: macos-latest
             target: aarch64-apple-darwin
-            ext: ''
+            cross: false
 
     steps:
       - uses: actions/checkout@v4
@@ -65,23 +65,33 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install cross-compilation tools (Linux aarch64)
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Build bl4-cli
         run: cargo build --release -p bl4-cli --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross && 'aarch64-linux-gnu-gcc' || '' }}
 
       - name: Build linewise
         run: cargo build --release -p linewise --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross && 'aarch64-linux-gnu-gcc' || '' }}
 
       - name: Upload bl4-cli binary
         uses: actions/upload-artifact@v4
         with:
-          name: bl4-${{ matrix.target }}${{ matrix.ext }}
-          path: target/${{ matrix.target }}/release/bl4${{ matrix.ext }}
+          name: bl4-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/bl4
 
       - name: Upload linewise binary
         uses: actions/upload-artifact@v4
         with:
-          name: linewise-${{ matrix.target }}${{ matrix.ext }}
-          path: target/${{ matrix.target }}/release/linewise${{ matrix.ext }}
+          name: linewise-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/linewise
 
   build-books:
     name: Build Guide Books
