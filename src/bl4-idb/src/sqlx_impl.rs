@@ -986,7 +986,7 @@ pub mod postgres {
             .await
             .map_err(|e| RepoError::Database(e.to_string()))?;
 
-            // Define migrations (id, sql)
+            // Define migrations (id, sql) - each must be a single statement
             let migrations: &[(&str, &str)] = &[
                 (
                     "0001_attachments_bigserial",
@@ -997,23 +997,25 @@ pub mod postgres {
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_unique ON attachments(item_serial, name, view)",
                 ),
                 (
-                    "0003_attachments_unique_null_safe",
-                    r#"
-                    DROP INDEX IF EXISTS idx_attachments_unique;
-                    CREATE UNIQUE INDEX idx_attachments_unique ON attachments(item_serial, name, view) WHERE view IS NOT NULL;
-                    "#,
+                    "0003_drop_old_unique_index",
+                    "DROP INDEX IF EXISTS idx_attachments_unique",
                 ),
                 (
-                    "0004_attachment_blobs",
-                    r#"
-                    CREATE TABLE IF NOT EXISTS attachment_blobs (
+                    "0004_attachments_unique_null_safe",
+                    "CREATE UNIQUE INDEX idx_attachments_unique ON attachments(item_serial, name, view) WHERE view IS NOT NULL",
+                ),
+                (
+                    "0005_attachment_blobs_table",
+                    r#"CREATE TABLE IF NOT EXISTS attachment_blobs (
                         hash TEXT PRIMARY KEY,
                         data BYTEA NOT NULL,
                         mime_type TEXT NOT NULL,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS blob_hash TEXT REFERENCES attachment_blobs(hash);
-                    "#,
+                    )"#,
+                ),
+                (
+                    "0006_attachments_blob_hash",
+                    "ALTER TABLE attachments ADD COLUMN IF NOT EXISTS blob_hash TEXT REFERENCES attachment_blobs(hash)",
                 ),
             ];
 
