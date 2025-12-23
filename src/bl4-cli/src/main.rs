@@ -822,6 +822,16 @@ enum ItemsDbCommand {
         force: bool,
     },
 
+    /// Decode items and populate item_values table
+    Decode {
+        /// Specific serial to decode (omit for --all)
+        serial: Option<String>,
+
+        /// Decode all items in the database
+        #[arg(long, conflicts_with = "serial")]
+        all: bool,
+    },
+
     /// Import items from a save file
     ImportSave {
         /// Path to .sav file
@@ -4968,6 +4978,111 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             );
         }
 
+        ItemsDbCommand::Decode { serial, all } => {
+            let wdb = bl4_idb::SqliteDb::open(db)?;
+            wdb.init()?;
+
+            let serials: Vec<String> = if let Some(s) = serial {
+                vec![s]
+            } else if all {
+                wdb.list_items(&bl4_idb::ItemFilter::default())?
+                    .into_iter()
+                    .map(|i| i.serial)
+                    .collect()
+            } else {
+                bail!("Either provide a serial or use --all");
+            };
+
+            let mut decoded_count = 0;
+            let mut values_set = 0;
+            let mut failed = 0;
+
+            for serial in &serials {
+                match bl4::ItemSerial::decode(serial) {
+                    Ok(item) => {
+                        // Extract level
+                        if let Some(level_code) = item.level {
+                            if let Some((capped, _raw)) = bl4::parts::level_from_code(level_code) {
+                                wdb.set_value(
+                                    serial,
+                                    "level",
+                                    &capped.to_string(),
+                                    bl4_idb::ValueSource::Decoder,
+                                    Some("bl4-cli"),
+                                    bl4_idb::Confidence::Inferred,
+                                )?;
+                                values_set += 1;
+                            }
+                        }
+
+                        // Extract manufacturer and weapon_type from first varint
+                        if let Some(mfg_id) = item.manufacturer {
+                            if let Some((mfg, wtype)) =
+                                bl4::parts::weapon_info_from_first_varint(mfg_id)
+                            {
+                                wdb.set_value(
+                                    serial,
+                                    "manufacturer",
+                                    mfg,
+                                    bl4_idb::ValueSource::Decoder,
+                                    Some("bl4-cli"),
+                                    bl4_idb::Confidence::Inferred,
+                                )?;
+                                values_set += 1;
+
+                                wdb.set_value(
+                                    serial,
+                                    "weapon_type",
+                                    wtype,
+                                    bl4_idb::ValueSource::Decoder,
+                                    Some("bl4-cli"),
+                                    bl4_idb::Confidence::Inferred,
+                                )?;
+                                values_set += 1;
+                            }
+                        } else if let Some(group_id) = item.part_group_id() {
+                            // Fallback for non-weapon items
+                            if let Some(cat_name) =
+                                bl4::parts::category_name_for_type(item.item_type, group_id)
+                            {
+                                wdb.set_value(
+                                    serial,
+                                    "weapon_type",
+                                    cat_name,
+                                    bl4_idb::ValueSource::Decoder,
+                                    Some("bl4-cli"),
+                                    bl4_idb::Confidence::Inferred,
+                                )?;
+                                values_set += 1;
+                            }
+                        }
+
+                        // Set item_type
+                        wdb.set_value(
+                            serial,
+                            "item_type",
+                            &item.item_type.to_string(),
+                            bl4_idb::ValueSource::Decoder,
+                            Some("bl4-cli"),
+                            bl4_idb::Confidence::Inferred,
+                        )?;
+                        values_set += 1;
+
+                        decoded_count += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to decode {}: {}", serial, e);
+                        failed += 1;
+                    }
+                }
+            }
+
+            println!(
+                "Decoded {} items, set {} values, {} failed",
+                decoded_count, values_set, failed
+            );
+        }
+
         ItemsDbCommand::ImportSave {
             save,
             decode,
@@ -5269,6 +5384,23 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                 return Ok(());
             }
 
+            // Bulk fetch all item_values (1 query)
+            let serials_for_values: Vec<&str> =
+                items.iter().map(|i| i.serial.as_str()).collect();
+            let all_values = wdb.get_all_values_bulk(&serials_for_values)?;
+
+            // Group values by serial for quick lookup
+            let mut values_by_serial: std::collections::HashMap<&str, Vec<&bl4_idb::ItemValue>> =
+                std::collections::HashMap::new();
+            for v in &all_values {
+                values_by_serial
+                    .entry(&v.item_serial)
+                    .or_default()
+                    .push(v);
+            }
+
+            println!("  Values: {} total across {} items", all_values.len(), values_by_serial.len());
+
             // Group items by source for separate batch UUIDs on server
             let mut groups: std::collections::HashMap<String, Vec<&bl4_idb::Item>> =
                 std::collections::HashMap::new();
@@ -5287,10 +5419,29 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                 let bulk_items: Vec<serde_json::Value> = group_items
                     .iter()
                     .map(|item| {
+                        // Get values for this item
+                        let item_values: Vec<serde_json::Value> = values_by_serial
+                            .get(item.serial.as_str())
+                            .map(|vals| {
+                                vals.iter()
+                                    .map(|v| {
+                                        serde_json::json!({
+                                            "field": v.field,
+                                            "value": v.value,
+                                            "source": v.source.to_string(),
+                                            "source_detail": v.source_detail,
+                                            "confidence": v.confidence.to_string()
+                                        })
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
                         serde_json::json!({
                             "serial": item.serial,
                             "name": item.name,
-                            "source": "bl4-cli"
+                            "source": "bl4-cli",
+                            "values": item_values
                         })
                     })
                     .collect();
@@ -5345,10 +5496,20 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                 let mut attachments_uploaded = 0;
                 let mut attachments_failed = 0;
 
-                for item in &items {
-                    let item_attachments = wdb.get_attachments(&item.serial)?;
-                    for attachment in item_attachments {
-                        let data = match wdb.get_attachment_data(attachment.id)? {
+                // Bulk fetch all attachments (1 query instead of N)
+                let serials: Vec<&str> = items.iter().map(|i| i.serial.as_str()).collect();
+                let all_attachments = wdb.get_attachments_bulk(&serials)?;
+
+                if !all_attachments.is_empty() {
+                    // Bulk fetch all attachment data (1 query instead of M)
+                    let attachment_ids: Vec<i64> = all_attachments.iter().map(|a| a.id).collect();
+                    let attachment_data: std::collections::HashMap<i64, Vec<u8>> = wdb
+                        .get_attachment_data_bulk(&attachment_ids)?
+                        .into_iter()
+                        .collect();
+
+                    for attachment in all_attachments {
+                        let data = match attachment_data.get(&attachment.id) {
                             Some(d) => d,
                             None => continue,
                         };
@@ -5356,7 +5517,7 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                         let upload_url = format!(
                             "{}/items/{}/attachments",
                             server.trim_end_matches('/'),
-                            urlencoding::encode(&item.serial)
+                            urlencoding::encode(&attachment.item_serial)
                         );
 
                         // Build multipart form
@@ -5375,7 +5536,7 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                         body.extend_from_slice(
                             format!("Content-Type: {}\r\n\r\n", attachment.mime_type).as_bytes(),
                         );
-                        body.extend_from_slice(&data);
+                        body.extend_from_slice(data);
                         body.extend_from_slice(b"\r\n");
 
                         // View field
@@ -5401,7 +5562,7 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                             Err(e) => {
                                 eprintln!(
                                     "Failed to upload attachment {} for {}: {}",
-                                    attachment.name, item.serial, e
+                                    attachment.name, attachment.item_serial, e
                                 );
                                 attachments_failed += 1;
                             }

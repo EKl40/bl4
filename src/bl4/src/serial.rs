@@ -723,7 +723,7 @@ pub fn parse_tokens_debug(bytes: &[u8]) -> Vec<Token> {
 impl ItemSerial {
     /// Decode a Borderlands 4 item serial
     ///
-    /// Format: @Ug<type><base85_data>
+    /// Format: `@Ug<type><base85_data>`
     /// Example: @Ugr$ZCm/&tH!t{KgK/Shxu>k
     pub fn decode(serial: &str) -> Result<Self, SerialError> {
         // Check for @Ug prefix

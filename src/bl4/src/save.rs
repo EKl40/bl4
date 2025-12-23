@@ -277,7 +277,7 @@ impl SaveFile {
         Ok(yaml_string.into_bytes())
     }
 
-    /// Query a value at a YAML path (e.g. "state.currencies.cash" or "state.experience[0].level")
+    /// Query a value at a YAML path (e.g. "state.currencies.cash" or "state.experience\[0\].level")
     pub fn get(&self, path: &str) -> Result<&serde_yaml::Value, SaveError> {
         query_yaml_path(&self.data, path)
     }

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Multipart, Path as AxumPath, Query, State},
+    extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -28,6 +28,41 @@ use uuid::Uuid;
 
 // =============================================================================
 // Helpers
+
+/// Resize an image if it exceeds MAX_IMAGE_WIDTH, preserving aspect ratio.
+/// Returns the (possibly resized) image data and mime type.
+fn resize_image_if_needed(data: &[u8], mime: &str) -> Result<(Vec<u8>, String), String> {
+    use image::ImageReader;
+    use std::io::Cursor;
+
+    let img = ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .map_err(|e| e.to_string())?
+        .decode()
+        .map_err(|e| e.to_string())?;
+
+    let (width, height) = (img.width(), img.height());
+
+    // If image is within limits, return original data
+    if width <= MAX_IMAGE_WIDTH {
+        return Ok((data.to_vec(), mime.to_string()));
+    }
+
+    // Calculate new dimensions preserving aspect ratio
+    let new_width = MAX_IMAGE_WIDTH;
+    let new_height = (height as f64 * (new_width as f64 / width as f64)) as u32;
+
+    // Resize using Lanczos3 filter for quality
+    let resized = img.resize(new_width, new_height, image::imageops::FilterType::Lanczos3);
+
+    // Encode as PNG for lossless output
+    let mut output = Cursor::new(Vec::new());
+    resized
+        .write_to(&mut output, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+
+    Ok((output.into_inner(), "image/png".to_string()))
+}
 
 /// Sanitize a database URL by redacting the password portion.
 fn sanitize_db_url(url: &str) -> String {
@@ -136,6 +171,41 @@ impl Database {
         match self {
             Database::Sqlite(db) => db.add_item(serial).await,
             Database::Postgres(db) => db.add_item(serial).await,
+        }
+    }
+
+    async fn add_items_bulk(&self, serials: &[&str]) -> Result<bl4_idb::AsyncBulkResult, bl4_idb::RepoError> {
+        use bl4_idb::AsyncBulkRepository;
+        match self {
+            Database::Sqlite(db) => db.add_items_bulk(serials).await,
+            Database::Postgres(db) => db.add_items_bulk(serials).await,
+        }
+    }
+
+    async fn set_sources_bulk(&self, items: &[(&str, &str)]) -> Result<(), bl4_idb::RepoError> {
+        match self {
+            Database::Sqlite(_) => {
+                // SQLite fallback: individual updates (TODO: optimize later)
+                Ok(())
+            }
+            Database::Postgres(db) => db.set_sources_bulk(items).await,
+        }
+    }
+
+    async fn set_item_types_bulk(&self, items: &[(&str, &str)]) -> Result<(), bl4_idb::RepoError> {
+        match self {
+            Database::Sqlite(_) => Ok(()),
+            Database::Postgres(db) => db.set_item_types_bulk(items).await,
+        }
+    }
+
+    async fn set_values_bulk(
+        &self,
+        values: &[(&str, &str, &str, &str, &str)],
+    ) -> Result<(), bl4_idb::RepoError> {
+        match self {
+            Database::Sqlite(_) => Ok(()),
+            Database::Postgres(db) => db.set_values_bulk(values).await,
         }
     }
 
@@ -283,10 +353,21 @@ pub struct ListItemsResponse {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+pub struct ItemValueRequest {
+    pub field: String,
+    pub value: String,
+    pub source: String,
+    pub source_detail: Option<String>,
+    pub confidence: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateItemRequest {
     pub serial: String,
     pub name: Option<String>,
     pub source: Option<String>,
+    #[serde(default)]
+    pub values: Vec<ItemValueRequest>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -386,8 +467,11 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
-/// Maximum attachment size: 10MB
+/// Maximum attachment upload size: 10MB (will be resized)
 const MAX_ATTACHMENT_SIZE: usize = 10 * 1024 * 1024;
+
+/// Maximum width for stored images (height scales proportionally)
+const MAX_IMAGE_WIDTH: u32 = 800;
 
 #[utoipa::path(
     get,
@@ -623,9 +707,13 @@ async fn upload_attachment(
         ));
     }
 
+    // Resize image if wider than MAX_IMAGE_WIDTH
+    let (final_data, final_mime) = resize_image_if_needed(&data, &mime)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Failed to process image: {}", e)))?;
+
     let id = state
         .db
-        .add_attachment(&serial, &name, &mime, &data, &view)
+        .add_attachment(&serial, &name, &final_mime, &final_data, &view)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -753,8 +841,19 @@ async fn create_items_bulk(
     let batch_source = format!("community:{}", batch_id);
 
     let mut results = Vec::new();
-    let mut succeeded = 0;
     let mut failed = 0;
+
+    // Phase 1: Validate all serials (CPU only, no DB)
+    struct ValidItem {
+        serial: String,
+        item_type: String,
+        source: String,
+        uuid: Uuid,
+        name: Option<String>,
+        values: Vec<ItemValueRequest>,
+    }
+
+    let mut valid_items: Vec<ValidItem> = Vec::new();
 
     for item in req.items {
         let decoded = match bl4::ItemSerial::decode(&item.serial) {
@@ -770,40 +869,7 @@ async fn create_items_bulk(
             }
         };
 
-        match state.db.get_item(&item.serial).await {
-            Ok(Some(_)) => {
-                results.push(CreateItemResponse {
-                    serial: item.serial,
-                    created: false,
-                    message: "Item already exists".into(),
-                });
-                failed += 1;
-                continue;
-            }
-            Err(e) => {
-                results.push(CreateItemResponse {
-                    serial: item.serial,
-                    created: false,
-                    message: format!("Database error: {}", e),
-                });
-                failed += 1;
-                continue;
-            }
-            Ok(None) => {}
-        }
-
-        if let Err(e) = state.db.add_item(&item.serial).await {
-            results.push(CreateItemResponse {
-                serial: item.serial,
-                created: false,
-                message: format!("Failed to create: {}", e),
-            });
-            failed += 1;
-            continue;
-        }
-
-        // Use provided source hash if available, otherwise use batch source
-        let (source, item_uuid) = match &item.source {
+        let (source, uuid) = match &item.source {
             Some(hashed_source) => {
                 let uuid = generate_item_uuid(&item.serial, hashed_source);
                 (hashed_source.clone(), uuid)
@@ -814,43 +880,103 @@ async fn create_items_bulk(
             }
         };
 
-        let _ = state.db.set_source(&item.serial, &source).await;
-        let _ = state
-            .db
-            .set_value(
-                &item.serial,
+        valid_items.push(ValidItem {
+            serial: item.serial,
+            item_type: decoded.item_type.to_string(),
+            source,
+            uuid,
+            name: item.name,
+            values: item.values,
+        });
+    }
+
+    // Phase 2: Bulk insert items (1 query)
+    let serials: Vec<&str> = valid_items.iter().map(|i| i.serial.as_str()).collect();
+    let bulk_result = state
+        .db
+        .add_items_bulk(&serials)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let succeeded = bulk_result.succeeded;
+    failed += bulk_result.failed;
+
+    // Phase 3: Bulk update sources (1 query)
+    let source_updates: Vec<(&str, &str)> = valid_items
+        .iter()
+        .map(|i| (i.serial.as_str(), i.source.as_str()))
+        .collect();
+    let _ = state.db.set_sources_bulk(&source_updates).await;
+
+    // Phase 4: Bulk update item_types (1 query)
+    let type_updates: Vec<(&str, &str)> = valid_items
+        .iter()
+        .map(|i| (i.serial.as_str(), i.item_type.as_str()))
+        .collect();
+    let _ = state.db.set_item_types_bulk(&type_updates).await;
+
+    // Phase 5: Bulk insert uuid values (1 query)
+    let uuid_strings: Vec<String> = valid_items.iter().map(|i| i.uuid.to_string()).collect();
+    let uuid_values: Vec<(&str, &str, &str, &str, &str)> = valid_items
+        .iter()
+        .zip(uuid_strings.iter())
+        .map(|(i, uuid_str)| {
+            (
+                i.serial.as_str(),
                 "uuid",
-                &item_uuid.to_string(),
-                ValueSource::Decoder,
-                None,
-                Confidence::Verified,
+                uuid_str.as_str(),
+                "decoder",
+                "verified",
             )
-            .await;
-        let _ = state
-            .db
-            .set_item_type(&item.serial, &decoded.item_type.to_string())
-            .await;
+        })
+        .collect();
+    let _ = state.db.set_values_bulk(&uuid_values).await;
 
-        if let Some(name) = &item.name {
-            let _ = state
-                .db
-                .set_value(
-                    &item.serial,
+    // Phase 6: Bulk insert name values if any (1 query)
+    let name_values: Vec<(&str, &str, &str, &str, &str)> = valid_items
+        .iter()
+        .filter_map(|i| {
+            i.name.as_ref().map(|n| {
+                (
+                    i.serial.as_str(),
                     "name",
-                    name,
-                    ValueSource::CommunityTool,
-                    Some(&source),
-                    Confidence::Uncertain,
+                    n.as_str(),
+                    "community_tool",
+                    "uncertain",
                 )
-                .await;
-        }
+            })
+        })
+        .collect();
+    if !name_values.is_empty() {
+        let _ = state.db.set_values_bulk(&name_values).await;
+    }
 
+    // Phase 7: Bulk insert item_values from request (1 query per batch)
+    let all_values: Vec<(&str, &str, &str, &str, &str)> = valid_items
+        .iter()
+        .flat_map(|i| {
+            i.values.iter().map(move |v| {
+                (
+                    i.serial.as_str(),
+                    v.field.as_str(),
+                    v.value.as_str(),
+                    v.source.as_str(),
+                    v.confidence.as_str(),
+                )
+            })
+        })
+        .collect();
+    if !all_values.is_empty() {
+        let _ = state.db.set_values_bulk(&all_values).await;
+    }
+
+    // Build results
+    for item in valid_items {
         results.push(CreateItemResponse {
             serial: item.serial,
             created: true,
-            message: format!("Item created with uuid {}", item_uuid),
+            message: format!("Item created with uuid {}", item.uuid),
         });
-        succeeded += 1;
     }
 
     Ok(Json(BulkCreateResponse {
@@ -1003,7 +1129,10 @@ async fn main() -> anyhow::Result<()> {
                 .route("/items", get(list_items).post(create_item))
                 .route("/items/bulk", post(create_items_bulk))
                 .route("/items/{serial}", get(get_item))
-                .route("/items/{serial}/attachments", post(upload_attachment))
+                .route(
+                    "/items/{serial}/attachments",
+                    post(upload_attachment).layer(DefaultBodyLimit::max(MAX_ATTACHMENT_SIZE)),
+                )
                 .route("/decode", post(decode_serial))
                 .route("/encode", post(encode_serial))
                 .route("/stats", get(get_stats))

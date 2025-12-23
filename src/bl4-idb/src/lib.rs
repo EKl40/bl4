@@ -69,6 +69,8 @@ pub use sqlx_impl::AsyncAttachmentsRepository;
 
 #[cfg(any(feature = "sqlx-sqlite", feature = "sqlx-postgres"))]
 pub use sqlx_impl::AsyncBulkRepository;
+#[cfg(any(feature = "sqlx-sqlite", feature = "sqlx-postgres"))]
+pub use sqlx_impl::BulkResult as AsyncBulkResult;
 
 // Re-export implementations
 #[cfg(feature = "sqlite-sync")]

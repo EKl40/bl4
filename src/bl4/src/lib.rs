@@ -48,19 +48,26 @@ pub mod serial;
 pub mod wasm;
 
 // Re-export commonly used items
+#[doc(inline)]
 pub use backup::{smart_backup, update_after_edit, BackupError};
+#[doc(inline)]
 pub use crypto::{decrypt_sav, derive_key, encrypt_sav, CryptoError};
+#[doc(inline)]
 pub use parts::{
     category_name, category_name_for_type, item_type_name, level_from_code, manufacturer_name,
     serial_format, serial_id_to_parts_category, SerialFormat,
 };
+#[doc(inline)]
 pub use save::{ChangeSet, SaveError, SaveFile, StateFlags};
+#[doc(inline)]
 pub use serial::{ItemSerial, SerialError};
 
 // Manifest data lookups
+#[doc(inline)]
 pub use manifest::{all_categories, all_manufacturers, part_name, stats as manifest_stats};
 
 // Reference data (rarities, elements, weapon types, manufacturers, gear types)
+#[doc(inline)]
 pub use reference::{
     element_by_code, gear_type_by_code, legendary_by_name, manufacturer_by_code,
     manufacturer_name_by_code, rarity_by_code, rarity_by_tier, stat_description,

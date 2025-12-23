@@ -887,6 +887,121 @@ impl AttachmentsRepository for SqliteDb {
     }
 }
 
+// Bulk attachment methods (not part of trait - SqliteDb specific)
+#[cfg(feature = "attachments")]
+impl SqliteDb {
+    /// Get all attachments for multiple serials (bulk fetch)
+    pub fn get_attachments_bulk(&self, serials: &[&str]) -> RepoResult<Vec<Attachment>> {
+        if serials.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Build placeholders for IN clause
+        let placeholders: Vec<String> = (1..=serials.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            "SELECT id, item_serial, name, mime_type, COALESCE(view, 'OTHER') FROM attachments WHERE item_serial IN ({})",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+        let attachments = stmt
+            .query_map(rusqlite::params_from_iter(serials.iter()), |row| {
+                Ok(Attachment {
+                    id: row.get(0)?,
+                    item_serial: row.get(1)?,
+                    name: row.get(2)?,
+                    mime_type: row.get(3)?,
+                    view: row.get(4)?,
+                })
+            })
+            .map_err(|e| RepoError::Database(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+        Ok(attachments)
+    }
+
+    /// Get attachment data for multiple IDs (bulk fetch)
+    pub fn get_attachment_data_bulk(&self, ids: &[i64]) -> RepoResult<Vec<(i64, Vec<u8>)>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            "SELECT id, data FROM attachments WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+        let data = stmt
+            .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(|e| RepoError::Database(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+        Ok(data)
+    }
+}
+
+// Bulk values method (not part of trait - SqliteDb specific)
+impl SqliteDb {
+    /// Get all item_values for multiple serials (bulk fetch)
+    pub fn get_all_values_bulk(&self, serials: &[&str]) -> RepoResult<Vec<ItemValue>> {
+        if serials.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders: Vec<String> = (1..=serials.len()).map(|i| format!("?{}", i)).collect();
+        let sql = format!(
+            "SELECT id, item_serial, field, value, source, source_detail, confidence, created_at
+             FROM item_values WHERE item_serial IN ({})
+             ORDER BY item_serial, field, source DESC, confidence DESC",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+        let values = stmt
+            .query_map(rusqlite::params_from_iter(serials.iter()), |row| {
+                Ok(ItemValue {
+                    id: row.get(0)?,
+                    item_serial: row.get(1)?,
+                    field: row.get(2)?,
+                    value: row.get(3)?,
+                    source: row
+                        .get::<_, String>(4)?
+                        .parse()
+                        .unwrap_or(ValueSource::Decoder),
+                    source_detail: row.get(5)?,
+                    confidence: row
+                        .get::<_, String>(6)?
+                        .parse()
+                        .unwrap_or(Confidence::Uncertain),
+                    created_at: row.get(7)?,
+                })
+            })
+            .map_err(|e| RepoError::Database(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+        Ok(values)
+    }
+}
+
 impl ImportExportRepository for SqliteDb {
     fn import_from_dir(&self, dir: &Path) -> RepoResult<String> {
         let serial_path = dir.join("serial.txt");

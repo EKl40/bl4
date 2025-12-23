@@ -970,6 +970,171 @@ pub mod postgres {
                     .map_err(|e| RepoError::Database(e.to_string()))?;
             Ok(rows.into_iter().map(|(s,)| s).collect())
         }
+
+        /// Run pending database migrations
+        async fn run_migrations(&self) -> AsyncRepoResult<()> {
+            // Create migrations tracking table
+            sqlx::query(
+                r#"
+                CREATE TABLE IF NOT EXISTS _migrations (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                "#,
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+            // Define migrations (id, sql)
+            let migrations: &[(&str, &str)] = &[
+                (
+                    "0001_attachments_bigserial",
+                    "ALTER TABLE attachments ALTER COLUMN id TYPE BIGINT",
+                ),
+                (
+                    "0002_attachments_unique",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_unique ON attachments(item_serial, name, view)",
+                ),
+                (
+                    "0003_attachments_unique_null_safe",
+                    r#"
+                    DROP INDEX IF EXISTS idx_attachments_unique;
+                    CREATE UNIQUE INDEX idx_attachments_unique ON attachments(item_serial, name, view) WHERE view IS NOT NULL;
+                    "#,
+                ),
+                (
+                    "0004_attachment_blobs",
+                    r#"
+                    CREATE TABLE IF NOT EXISTS attachment_blobs (
+                        hash TEXT PRIMARY KEY,
+                        data BYTEA NOT NULL,
+                        mime_type TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS blob_hash TEXT REFERENCES attachment_blobs(hash);
+                    "#,
+                ),
+            ];
+
+            for (id, sql) in migrations {
+                // Check if already applied
+                let applied: Option<(String,)> =
+                    sqlx::query_as("SELECT id FROM _migrations WHERE id = $1")
+                        .bind(id)
+                        .fetch_optional(&self.pool)
+                        .await
+                        .map_err(|e| RepoError::Database(e.to_string()))?;
+
+                if applied.is_some() {
+                    continue;
+                }
+
+                // Run migration
+                sqlx::query(*sql)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| RepoError::Database(format!("Migration {} failed: {}", id, e)))?;
+
+                // Mark as applied
+                sqlx::query("INSERT INTO _migrations (id) VALUES ($1)")
+                    .bind(id)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| RepoError::Database(e.to_string()))?;
+            }
+
+            Ok(())
+        }
+
+        /// Bulk update sources for multiple items (single query)
+        pub async fn set_sources_bulk(
+            &self,
+            items: &[(&str, &str)], // (serial, source)
+        ) -> AsyncRepoResult<()> {
+            if items.is_empty() {
+                return Ok(());
+            }
+            let serials: Vec<String> = items.iter().map(|(s, _)| s.to_string()).collect();
+            let sources: Vec<String> = items.iter().map(|(_, src)| src.to_string()).collect();
+
+            sqlx::query(
+                r#"
+                UPDATE weapons SET source = data.source
+                FROM (SELECT UNNEST($1::text[]) as serial, UNNEST($2::text[]) as source) as data
+                WHERE weapons.serial = data.serial
+                "#,
+            )
+            .bind(&serials)
+            .bind(&sources)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+            Ok(())
+        }
+
+        /// Bulk update item_types for multiple items (single query)
+        pub async fn set_item_types_bulk(
+            &self,
+            items: &[(&str, &str)], // (serial, item_type)
+        ) -> AsyncRepoResult<()> {
+            if items.is_empty() {
+                return Ok(());
+            }
+            let serials: Vec<String> = items.iter().map(|(s, _)| s.to_string()).collect();
+            let types: Vec<String> = items.iter().map(|(_, t)| t.to_string()).collect();
+
+            sqlx::query(
+                r#"
+                UPDATE weapons SET item_type = data.item_type
+                FROM (SELECT UNNEST($1::text[]) as serial, UNNEST($2::text[]) as item_type) as data
+                WHERE weapons.serial = data.serial
+                "#,
+            )
+            .bind(&serials)
+            .bind(&types)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+            Ok(())
+        }
+
+        /// Bulk insert item values (single query)
+        pub async fn set_values_bulk(
+            &self,
+            values: &[(&str, &str, &str, &str, &str)], // (serial, field, value, source, confidence)
+        ) -> AsyncRepoResult<()> {
+            if values.is_empty() {
+                return Ok(());
+            }
+            let serials: Vec<String> = values.iter().map(|(s, _, _, _, _)| s.to_string()).collect();
+            let fields: Vec<String> = values.iter().map(|(_, f, _, _, _)| f.to_string()).collect();
+            let vals: Vec<String> = values.iter().map(|(_, _, v, _, _)| v.to_string()).collect();
+            let sources: Vec<String> = values.iter().map(|(_, _, _, s, _)| s.to_string()).collect();
+            let confidences: Vec<String> = values.iter().map(|(_, _, _, _, c)| c.to_string()).collect();
+
+            sqlx::query(
+                r#"
+                INSERT INTO item_values (item_serial, field, value, source, confidence)
+                SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
+                ON CONFLICT (item_serial, field, source) DO UPDATE SET
+                    value = EXCLUDED.value,
+                    confidence = EXCLUDED.confidence
+                "#,
+            )
+            .bind(&serials)
+            .bind(&fields)
+            .bind(&vals)
+            .bind(&sources)
+            .bind(&confidences)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+            Ok(())
+        }
     }
 
     impl AsyncItemsRepository for SqlxPgDb {
@@ -1033,7 +1198,7 @@ pub mod postgres {
             sqlx::query(
                 r#"
                 CREATE TABLE IF NOT EXISTS attachments (
-                    id SERIAL PRIMARY KEY,
+                    id BIGSERIAL PRIMARY KEY,
                     item_serial TEXT NOT NULL REFERENCES weapons(serial) ON DELETE CASCADE,
                     name TEXT NOT NULL,
                     mime_type TEXT NOT NULL,
@@ -1092,6 +1257,9 @@ pub mod postgres {
                     .await
                     .map_err(|e| RepoError::Database(e.to_string()))?;
             }
+
+            // Run migrations
+            self.run_migrations().await?;
 
             Ok(())
         }
@@ -1466,17 +1634,69 @@ pub mod postgres {
             data: &[u8],
             view: &str,
         ) -> AsyncRepoResult<i64> {
-            let row = sqlx::query(
-                "INSERT INTO attachments (item_serial, name, mime_type, data, view) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            use sha2::{Digest, Sha256};
+
+            // Compute content hash for deduplication
+            let mut hasher = Sha256::new();
+            hasher.update(data);
+            let hash = hex::encode(hasher.finalize());
+
+            // Insert blob if not exists (content-addressed)
+            sqlx::query(
+                r#"
+                INSERT INTO attachment_blobs (hash, data, mime_type)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (hash) DO NOTHING
+                "#,
             )
-            .bind(serial)
-            .bind(name)
-            .bind(mime_type)
+            .bind(&hash)
             .bind(data)
-            .bind(view)
-            .fetch_one(&self.pool)
+            .bind(mime_type)
+            .execute(&self.pool)
             .await
             .map_err(|e| RepoError::Database(e.to_string()))?;
+
+            // Insert attachment record, handling partial index
+            // View is non-NULL: upsert. View is NULL equivalent (empty): just insert.
+            let view_val = if view.is_empty() { None } else { Some(view) };
+
+            let row = if view_val.is_some() {
+                // Non-NULL view: use ON CONFLICT to update
+                sqlx::query(
+                    r#"
+                    INSERT INTO attachments (item_serial, name, mime_type, blob_hash, view)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (item_serial, name, view) DO UPDATE SET
+                        mime_type = EXCLUDED.mime_type,
+                        blob_hash = EXCLUDED.blob_hash
+                    RETURNING id
+                    "#,
+                )
+                .bind(serial)
+                .bind(name)
+                .bind(mime_type)
+                .bind(&hash)
+                .bind(view_val)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| RepoError::Database(e.to_string()))?
+            } else {
+                // NULL view: just insert (no uniqueness constraint)
+                sqlx::query(
+                    r#"
+                    INSERT INTO attachments (item_serial, name, mime_type, blob_hash, view)
+                    VALUES ($1, $2, $3, $4, NULL)
+                    RETURNING id
+                    "#,
+                )
+                .bind(serial)
+                .bind(name)
+                .bind(mime_type)
+                .bind(&hash)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| RepoError::Database(e.to_string()))?
+            };
 
             use sqlx::Row;
             let id: i64 = row
@@ -1519,11 +1739,19 @@ pub mod postgres {
         }
 
         async fn get_attachment_data(&self, id: i64) -> AsyncRepoResult<Option<Vec<u8>>> {
-            let row = sqlx::query("SELECT data FROM attachments WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| RepoError::Database(e.to_string()))?;
+            // Try content-addressed storage first (blob_hash), fallback to legacy data column
+            let row = sqlx::query(
+                r#"
+                SELECT COALESCE(b.data, a.data) as data
+                FROM attachments a
+                LEFT JOIN attachment_blobs b ON a.blob_hash = b.hash
+                WHERE a.id = $1
+                "#,
+            )
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| RepoError::Database(e.to_string()))?;
 
             match row {
                 Some(r) => {
@@ -1549,19 +1777,27 @@ pub mod postgres {
 
     impl AsyncBulkRepository for SqlxPgDb {
         async fn add_items_bulk(&self, serials: &[&str]) -> AsyncRepoResult<BulkResult> {
-            let mut result = BulkResult::default();
-
-            for serial in serials {
-                match self.add_item(serial).await {
-                    Ok(_) => result.succeeded += 1,
-                    Err(e) => {
-                        result.failed += 1;
-                        result.errors.push((serial.to_string(), e.to_string()));
-                    }
-                }
+            if serials.is_empty() {
+                return Ok(BulkResult::default());
             }
 
-            Ok(result)
+            // Use UNNEST for true bulk insert with ON CONFLICT DO NOTHING
+            let serials_vec: Vec<String> = serials.iter().map(|s| s.to_string()).collect();
+
+            let rows_affected = sqlx::query(
+                "INSERT INTO weapons (serial) SELECT * FROM UNNEST($1::text[]) ON CONFLICT DO NOTHING",
+            )
+            .bind(&serials_vec)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| RepoError::Database(e.to_string()))?
+            .rows_affected();
+
+            Ok(BulkResult {
+                succeeded: rows_affected as usize,
+                failed: serials.len() - rows_affected as usize,
+                errors: vec![], // Can't determine which ones failed with bulk insert
+            })
         }
     }
 }
