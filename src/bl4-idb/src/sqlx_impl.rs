@@ -1804,3 +1804,39 @@ pub mod postgres {
         }
     }
 }
+
+#[cfg(all(test, feature = "sqlx-postgres"))]
+mod tests {
+    use super::postgres::SqlxPgDb;
+    use super::AsyncItemsRepository;
+
+    /// Test PostgreSQL migrations run successfully
+    /// Run with: cargo test -p bl4-idb --features sqlx-postgres test_postgres_migrations -- --ignored
+    #[tokio::test]
+    #[ignore] // Requires Docker
+    async fn test_postgres_migrations() {
+        use testcontainers::runners::AsyncRunner;
+        use testcontainers_modules::postgres::Postgres;
+
+        // Start PostgreSQL container
+        let container = Postgres::default().start().await.unwrap();
+        let port = container.get_host_port_ipv4(5432).await.unwrap();
+
+        let url = format!("postgres://postgres:postgres@localhost:{}/postgres", port);
+
+        // Connect and run init (which runs migrations)
+        let db = SqlxPgDb::connect(&url).await.expect("Failed to connect");
+        db.init().await.expect("Failed to run migrations");
+
+        // Verify we can do basic operations
+        db.add_item("@UgTestSerial123")
+            .await
+            .expect("Failed to add item");
+        let item = db
+            .get_item("@UgTestSerial123")
+            .await
+            .expect("Failed to get item");
+        assert!(item.is_some());
+        assert_eq!(item.unwrap().serial, "@UgTestSerial123");
+    }
+}
