@@ -215,6 +215,48 @@ pub mod sqlite {
                     .unwrap_or_default(),
             })
         }
+
+        /// Get a setting value by key
+        pub async fn get_setting(&self, key: &str) -> AsyncRepoResult<Option<String>> {
+            let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = ?")
+                .bind(key)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| RepoError::Database(e.to_string()))?;
+            Ok(row.map(|(v,)| v))
+        }
+
+        /// Set a setting value
+        pub async fn set_setting(&self, key: &str, value: &str) -> AsyncRepoResult<()> {
+            sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+                .bind(key)
+                .bind(value)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| RepoError::Database(e.to_string()))?;
+            Ok(())
+        }
+
+        /// Get the source salt, generating one if it doesn't exist
+        pub async fn get_or_create_salt(&self) -> AsyncRepoResult<String> {
+            if let Some(salt) = self.get_setting("source_salt").await? {
+                Ok(salt)
+            } else {
+                let salt = crate::generate_salt();
+                self.set_setting("source_salt", &salt).await?;
+                Ok(salt)
+            }
+        }
+
+        /// Get all distinct sources from the database
+        pub async fn get_distinct_sources(&self) -> AsyncRepoResult<Vec<String>> {
+            let rows: Vec<(String,)> =
+                sqlx::query_as("SELECT DISTINCT source FROM weapons WHERE source IS NOT NULL")
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| RepoError::Database(e.to_string()))?;
+            Ok(rows.into_iter().map(|(s,)| s).collect())
+        }
     }
 
     impl AsyncItemsRepository for SqlxSqliteDb {
@@ -302,6 +344,19 @@ pub mod sqlite {
                     confidence TEXT NOT NULL DEFAULT 'inferred',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(item_serial, field, source)
+                )
+                "#,
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+            // Settings table for storing salt and other config
+            sqlx::query(
+                r#"
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT NOT NULL
                 )
                 "#,
             )
@@ -866,6 +921,51 @@ pub mod postgres {
                     .unwrap_or_default(),
             })
         }
+
+        /// Get a setting value by key
+        pub async fn get_setting(&self, key: &str) -> AsyncRepoResult<Option<String>> {
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT value FROM settings WHERE key = $1")
+                    .bind(key)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|e| RepoError::Database(e.to_string()))?;
+            Ok(row.map(|(v,)| v))
+        }
+
+        /// Set a setting value
+        pub async fn set_setting(&self, key: &str, value: &str) -> AsyncRepoResult<()> {
+            sqlx::query(
+                "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2",
+            )
+            .bind(key)
+            .bind(value)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+            Ok(())
+        }
+
+        /// Get the source salt, generating one if it doesn't exist
+        pub async fn get_or_create_salt(&self) -> AsyncRepoResult<String> {
+            if let Some(salt) = self.get_setting("source_salt").await? {
+                Ok(salt)
+            } else {
+                let salt = crate::generate_salt();
+                self.set_setting("source_salt", &salt).await?;
+                Ok(salt)
+            }
+        }
+
+        /// Get all distinct sources from the database
+        pub async fn get_distinct_sources(&self) -> AsyncRepoResult<Vec<String>> {
+            let rows: Vec<(String,)> =
+                sqlx::query_as("SELECT DISTINCT source FROM weapons WHERE source IS NOT NULL")
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| RepoError::Database(e.to_string()))?;
+            Ok(rows.into_iter().map(|(s,)| s).collect())
+        }
     }
 
     impl AsyncItemsRepository for SqlxPgDb {
@@ -954,6 +1054,19 @@ pub mod postgres {
                     confidence TEXT NOT NULL DEFAULT 'inferred',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(item_serial, field, source)
+                )
+                "#,
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+
+            // Settings table for storing salt and other config
+            sqlx::query(
+                r#"
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT NOT NULL
                 )
                 "#,
             )

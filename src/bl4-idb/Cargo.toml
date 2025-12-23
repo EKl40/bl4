@@ -30,3 +30,9 @@ rusqlite = { workspace = true, optional = true }
 # Async SQLx (server) - 0.9 alpha for libsqlite3-sys compatibility with Servo
 sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "macros"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
+
+# Hashing and UUIDs for source anonymization
+sha2 = "0.10"
+uuid = { version = "1.11", features = ["v4", "v5"] }
+hex = "0.4"
+rand = "0.8"

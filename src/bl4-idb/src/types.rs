@@ -3,6 +3,7 @@
 //! These types are database-agnostic and used by all implementations.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 /// Verification status for items
@@ -381,6 +382,62 @@ pub fn pick_best_value(values: impl IntoIterator<Item = ItemValue>) -> Option<It
             other => other,
         })
 }
+
+// =============================================================================
+// Source Hashing
+// =============================================================================
+
+/// Hash a source string with a salt for anonymous publishing.
+/// Returns a 12-character hex string.
+pub fn hash_source(source: &str, salt: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(salt.as_bytes());
+    hasher.update(source.as_bytes());
+    let result = hasher.finalize();
+    hex::encode(&result[..6]) // 12 hex chars
+}
+
+/// Generate a random salt for source hashing (32 bytes, hex-encoded).
+pub fn generate_salt() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 32] = rng.gen();
+    hex::encode(bytes)
+}
+
+/// Try to find the original source name from a hash.
+/// Compares the hash against all known sources.
+pub fn lookup_source_hash<'a>(
+    hash: &str,
+    salt: &str,
+    known_sources: impl IntoIterator<Item = &'a str>,
+) -> Option<String> {
+    for source in known_sources {
+        if hash_source(source, salt) == hash {
+            return Some(source.to_string());
+        }
+    }
+    None
+}
+
+/// BL4 namespace UUID for generating deterministic UUIDv5 values.
+/// This is a fixed namespace for all BL4 items.
+pub const BL4_NAMESPACE: uuid::Uuid = uuid::uuid!("b14c0de4-0000-4000-8000-000000000001");
+
+/// Generate a deterministic UUIDv5 from a serial and hashed source.
+pub fn generate_item_uuid(serial: &str, hashed_source: &str) -> uuid::Uuid {
+    let name = format!("{}:{}", serial, hashed_source);
+    uuid::Uuid::new_v5(&BL4_NAMESPACE, name.as_bytes())
+}
+
+/// Generate a random UUIDv4 for items without a source.
+pub fn generate_random_uuid() -> uuid::Uuid {
+    uuid::Uuid::new_v4()
+}
+
+// =============================================================================
+// Value Selection
+// =============================================================================
 
 /// Group values by field and pick best for each
 pub fn best_values_by_field(

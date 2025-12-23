@@ -12,8 +12,8 @@ use axum::{
     Json, Router,
 };
 use bl4_idb::{
-    AsyncAttachmentsRepository, AsyncItemsRepository, Confidence, ItemFilter, SqlxPgDb,
-    SqlxSqliteDb, ValueSource,
+    generate_item_uuid, generate_random_uuid, AsyncAttachmentsRepository, AsyncItemsRepository,
+    Confidence, ItemFilter, SqlxPgDb, SqlxSqliteDb, ValueSource,
 };
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -673,15 +673,38 @@ async fn create_item(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Generate unique source ID for this upload
-    let upload_id = Uuid::new_v4().to_string();
-    let source = format!("community:{}", upload_id);
+    // Use provided source hash if available, otherwise generate random
+    let (source, item_uuid) = match &req.source {
+        Some(hashed_source) => {
+            // Client provided a hashed source - generate deterministic UUIDv5
+            let uuid = generate_item_uuid(&req.serial, hashed_source);
+            (hashed_source.clone(), uuid)
+        }
+        None => {
+            // No source provided - generate random UUIDv4
+            let uuid = generate_random_uuid();
+            (format!("community:{}", uuid), uuid)
+        }
+    };
 
     state
         .db
         .set_source(&req.serial, &source)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Store the UUID as metadata (for future sync/dedup)
+    let _ = state
+        .db
+        .set_value(
+            &req.serial,
+            "uuid",
+            &item_uuid.to_string(),
+            ValueSource::Decoder,
+            None,
+            Confidence::Verified,
+        )
+        .await;
 
     if let Some(name) = &req.name {
         state
@@ -709,7 +732,7 @@ async fn create_item(
         Json(CreateItemResponse {
             serial: req.serial,
             created: true,
-            message: format!("Item created with source community:{}", upload_id),
+            message: format!("Item created with uuid {}", item_uuid),
         }),
     ))
 }
@@ -779,8 +802,30 @@ async fn create_items_bulk(
             continue;
         }
 
-        // Use the batch-specific source for all items in this upload
-        let _ = state.db.set_source(&item.serial, &batch_source).await;
+        // Use provided source hash if available, otherwise use batch source
+        let (source, item_uuid) = match &item.source {
+            Some(hashed_source) => {
+                let uuid = generate_item_uuid(&item.serial, hashed_source);
+                (hashed_source.clone(), uuid)
+            }
+            None => {
+                let uuid = generate_random_uuid();
+                (batch_source.clone(), uuid)
+            }
+        };
+
+        let _ = state.db.set_source(&item.serial, &source).await;
+        let _ = state
+            .db
+            .set_value(
+                &item.serial,
+                "uuid",
+                &item_uuid.to_string(),
+                ValueSource::Decoder,
+                None,
+                Confidence::Verified,
+            )
+            .await;
         let _ = state
             .db
             .set_item_type(&item.serial, &decoded.item_type.to_string())
@@ -794,7 +839,7 @@ async fn create_items_bulk(
                     "name",
                     name,
                     ValueSource::CommunityTool,
-                    item.source.as_deref(),
+                    Some(&source),
                     Confidence::Uncertain,
                 )
                 .await;
@@ -803,7 +848,7 @@ async fn create_items_bulk(
         results.push(CreateItemResponse {
             serial: item.serial,
             created: true,
-            message: "Item created".into(),
+            message: format!("Item created with uuid {}", item_uuid),
         });
         succeeded += 1;
     }

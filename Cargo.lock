@@ -802,12 +802,16 @@ name = "bl4-idb"
 version = "0.4.5"
 dependencies = [
  "anyhow",
+ "hex",
+ "rand 0.8.5",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
