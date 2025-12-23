@@ -179,10 +179,146 @@ impl SqliteDb {
     }
 }
 
+impl SqliteDb {
+    /// Check if a migration has been applied
+    fn is_migration_applied(&self, version: &str) -> RepoResult<bool> {
+        let result: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM schema_migrations WHERE version = ?1",
+                params![version],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+        Ok(result.is_some())
+    }
+
+    /// Mark a migration as applied
+    fn mark_migration_applied(&self, version: &str) -> RepoResult<()> {
+        self.conn
+            .execute(
+                "INSERT INTO schema_migrations (version) VALUES (?1)",
+                params![version],
+            )
+            .map_err(|e| RepoError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Run pending migrations
+    fn run_migrations(&self) -> RepoResult<()> {
+        // Check if tables already exist (for existing databases)
+        let tables_exist = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='weapons'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+
+        // Migration 0001: Base schema (weapons, weapon_parts, attachments, item_values, settings)
+        if !self.is_migration_applied("0001_base_schema")? {
+            self.conn
+                .execute_batch(
+                    r#"
+                CREATE TABLE IF NOT EXISTS weapons (
+                    serial TEXT PRIMARY KEY NOT NULL,
+                    name TEXT,
+                    prefix TEXT,
+                    manufacturer TEXT,
+                    weapon_type TEXT,
+                    item_type TEXT,
+                    rarity TEXT,
+                    level INTEGER,
+                    element TEXT,
+                    dps INTEGER,
+                    damage INTEGER,
+                    accuracy INTEGER,
+                    fire_rate REAL,
+                    reload_time REAL,
+                    mag_size INTEGER,
+                    value INTEGER,
+                    red_text TEXT,
+                    notes TEXT,
+                    verification_status TEXT DEFAULT 'unverified',
+                    verification_notes TEXT,
+                    verified_at TIMESTAMP,
+                    legal BOOLEAN DEFAULT FALSE,
+                    source TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS weapon_parts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_serial TEXT NOT NULL REFERENCES weapons(serial) ON DELETE CASCADE,
+                    slot TEXT NOT NULL,
+                    part_index INTEGER,
+                    part_name TEXT,
+                    manufacturer TEXT,
+                    effect TEXT,
+                    verified BOOLEAN DEFAULT FALSE,
+                    verification_method TEXT,
+                    verification_notes TEXT,
+                    verified_at TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS attachments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_serial TEXT NOT NULL REFERENCES weapons(serial) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    data BLOB NOT NULL,
+                    view TEXT DEFAULT 'OTHER'
+                );
+
+                CREATE TABLE IF NOT EXISTS item_values (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_serial TEXT NOT NULL REFERENCES weapons(serial) ON DELETE CASCADE,
+                    field TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    source_detail TEXT,
+                    confidence TEXT NOT NULL DEFAULT 'inferred',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(item_serial, field, source)
+                );
+
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_weapons_name ON weapons(name);
+                CREATE INDEX IF NOT EXISTS idx_weapons_manufacturer ON weapons(manufacturer);
+                CREATE INDEX IF NOT EXISTS idx_weapon_parts_item_serial ON weapon_parts(item_serial);
+                CREATE INDEX IF NOT EXISTS idx_item_values_serial ON item_values(item_serial);
+                CREATE INDEX IF NOT EXISTS idx_item_values_field ON item_values(item_serial, field);
+                CREATE INDEX IF NOT EXISTS idx_attachments_item_serial ON attachments(item_serial);
+                "#,
+                )
+                .map_err(|e| RepoError::Database(e.to_string()))?;
+
+            self.mark_migration_applied("0001_base_schema")?;
+
+            if tables_exist {
+                println!("SQLite: Marked existing schema as migrated (0001_base_schema)");
+            } else {
+                println!("SQLite: Applied migration 0001_base_schema");
+            }
+        }
+
+        // Future migrations go here:
+        // if !self.is_migration_applied("0002_...")? { ... }
+
+        Ok(())
+    }
+}
+
 impl ItemsRepository for SqliteDb {
     fn init(&self) -> RepoResult<()> {
-        // Check if we need to migrate from old schema
-        let needs_migration = self
+        // Check if we need to migrate from old schema (legacy id-based PK)
+        let needs_legacy_migration = self
             .conn
             .query_row(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='weapons'
@@ -192,89 +328,23 @@ impl ItemsRepository for SqliteDb {
             )
             .unwrap_or(false);
 
-        if needs_migration {
+        if needs_legacy_migration {
             self.migrate_to_serial_pk()?;
         }
 
+        // Create schema_migrations table first
         self.conn
-            .execute_batch(
-                r#"
-            CREATE TABLE IF NOT EXISTS weapons (
-                serial TEXT PRIMARY KEY NOT NULL,
-                name TEXT,
-                prefix TEXT,
-                manufacturer TEXT,
-                weapon_type TEXT,
-                item_type TEXT,
-                rarity TEXT,
-                level INTEGER,
-                element TEXT,
-                dps INTEGER,
-                damage INTEGER,
-                accuracy INTEGER,
-                fire_rate REAL,
-                reload_time REAL,
-                mag_size INTEGER,
-                value INTEGER,
-                red_text TEXT,
-                notes TEXT,
-                verification_status TEXT DEFAULT 'unverified',
-                verification_notes TEXT,
-                verified_at TIMESTAMP,
-                legal BOOLEAN DEFAULT FALSE,
-                source TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS weapon_parts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                item_serial TEXT NOT NULL REFERENCES weapons(serial) ON DELETE CASCADE,
-                slot TEXT NOT NULL,
-                part_index INTEGER,
-                part_name TEXT,
-                manufacturer TEXT,
-                effect TEXT,
-                verified BOOLEAN DEFAULT FALSE,
-                verification_method TEXT,
-                verification_notes TEXT,
-                verified_at TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS attachments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                item_serial TEXT NOT NULL REFERENCES weapons(serial) ON DELETE CASCADE,
-                name TEXT NOT NULL,
-                mime_type TEXT NOT NULL,
-                data BLOB NOT NULL,
-                view TEXT DEFAULT 'OTHER'
-            );
-
-            CREATE TABLE IF NOT EXISTS item_values (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                item_serial TEXT NOT NULL REFERENCES weapons(serial) ON DELETE CASCADE,
-                field TEXT NOT NULL,
-                value TEXT NOT NULL,
-                source TEXT NOT NULL,
-                source_detail TEXT,
-                confidence TEXT NOT NULL DEFAULT 'inferred',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(item_serial, field, source)
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY NOT NULL,
-                value TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_weapons_name ON weapons(name);
-            CREATE INDEX IF NOT EXISTS idx_weapons_manufacturer ON weapons(manufacturer);
-            CREATE INDEX IF NOT EXISTS idx_weapon_parts_item_serial ON weapon_parts(item_serial);
-            CREATE INDEX IF NOT EXISTS idx_item_values_serial ON item_values(item_serial);
-            CREATE INDEX IF NOT EXISTS idx_item_values_field ON item_values(item_serial, field);
-            CREATE INDEX IF NOT EXISTS idx_attachments_item_serial ON attachments(item_serial);
-            "#,
+            .execute(
+                "CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version TEXT PRIMARY KEY NOT NULL,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )",
+                [],
             )
             .map_err(|e| RepoError::Database(e.to_string()))?;
+
+        // Run incremental migrations
+        self.run_migrations()?;
 
         Ok(())
     }

@@ -24,7 +24,8 @@
 //!
 //! # Example (Async with SQLx SQLite)
 //!
-//! ```no_run
+//! ```ignore
+//! // Requires feature "sqlx-sqlite"
 //! use bl4_idb::{sqlx_impl::sqlite::SqlxSqliteDb, sqlx_impl::AsyncItemsRepository, ItemFilter};
 //!
 //! async fn example() {
