@@ -1010,12 +1010,28 @@ pub mod postgres {
                         hash TEXT PRIMARY KEY,
                         data BYTEA NOT NULL,
                         mime_type TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                     )"#,
                 ),
                 (
                     "0006_attachments_blob_hash",
                     "ALTER TABLE attachments ADD COLUMN IF NOT EXISTS blob_hash TEXT REFERENCES attachment_blobs(hash)",
+                ),
+                (
+                    "0007_weapons_created_at_tz",
+                    "ALTER TABLE weapons ALTER COLUMN created_at TYPE TIMESTAMPTZ",
+                ),
+                (
+                    "0008_weapons_verified_at_tz",
+                    "ALTER TABLE weapons ALTER COLUMN verified_at TYPE TIMESTAMPTZ",
+                ),
+                (
+                    "0009_item_values_created_at_tz",
+                    "ALTER TABLE item_values ALTER COLUMN created_at TYPE TIMESTAMPTZ",
+                ),
+                (
+                    "0010_weapon_parts_verified_at_tz",
+                    "ALTER TABLE weapon_parts ALTER COLUMN verified_at TYPE TIMESTAMPTZ",
                 ),
             ];
 
@@ -1166,10 +1182,10 @@ pub mod postgres {
                     notes TEXT,
                     verification_status TEXT DEFAULT 'unverified',
                     verification_notes TEXT,
-                    verified_at TIMESTAMP,
+                    verified_at TIMESTAMPTZ,
                     legal BOOLEAN DEFAULT FALSE,
                     source TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                 )
                 "#,
             )
@@ -1190,7 +1206,7 @@ pub mod postgres {
                     verified BOOLEAN DEFAULT FALSE,
                     verification_method TEXT,
                     verification_notes TEXT,
-                    verified_at TIMESTAMP
+                    verified_at TIMESTAMPTZ
                 )
                 "#,
             )
@@ -1224,7 +1240,7 @@ pub mod postgres {
                     source TEXT NOT NULL,
                     source_detail TEXT,
                     confidence TEXT NOT NULL DEFAULT 'inferred',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(item_serial, field, source)
                 )
                 "#,
