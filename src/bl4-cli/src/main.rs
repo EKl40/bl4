@@ -53,7 +53,6 @@ enum Commands {
     #[command(visible_alias = "i")]
     Inspect {
         /// Path to .sav file
-        #[arg(short, long)]
         input: PathBuf,
 
         /// Steam ID for decryption (uses configured default if not provided)
@@ -159,13 +158,12 @@ enum Commands {
     /// Generate manifest files from game data (requires 'research' feature)
     #[cfg(feature = "research")]
     Manifest {
+        /// Path to game's Paks directory containing .utoc/.ucas files
+        paks: PathBuf,
+
         /// Path to memory dump file for usmap and parts extraction
         #[arg(short, long)]
         dump: Option<PathBuf>,
-
-        /// Path to game's Paks directory containing .utoc/.ucas files
-        #[arg(short, long)]
-        paks: PathBuf,
 
         /// Path to .usmap file (generated from dump if not provided)
         #[arg(short = 'm', long)]
@@ -228,7 +226,6 @@ enum SaveCommand {
     /// Edit a save file in your $EDITOR
     Edit {
         /// Path to .sav file
-        #[arg(short, long)]
         input: PathBuf,
 
         /// Steam ID for decryption/encryption (uses configured default if not provided)
@@ -243,15 +240,14 @@ enum SaveCommand {
     /// Get specific values from a save file
     Get {
         /// Path to .sav file
-        #[arg(short, long)]
         input: PathBuf,
+
+        /// YAML path query (e.g. "state.currencies.cash" or "state.experience[0].level")
+        query: Option<String>,
 
         /// Steam ID for decryption (uses configured default if not provided)
         #[arg(short, long)]
         steam_id: Option<String>,
-
-        /// YAML path query (e.g. "state.currencies.cash" or "state.experience[0].level")
-        query: Option<String>,
 
         /// Show character level and XP
         #[arg(long)]
@@ -273,18 +269,17 @@ enum SaveCommand {
     /// Set specific values in a save file
     Set {
         /// Path to .sav file
-        #[arg(short, long)]
         input: PathBuf,
-
-        /// Steam ID for encryption/decryption (uses configured default if not provided)
-        #[arg(short, long)]
-        steam_id: Option<String>,
 
         /// YAML path to modify (e.g. "state.currencies.cash" or "state.experience[0].level")
         path: String,
 
         /// Value to set (auto-detects numbers vs strings, unless --raw is used)
         value: String,
+
+        /// Steam ID for encryption/decryption (uses configured default if not provided)
+        #[arg(short, long)]
+        steam_id: Option<String>,
 
         /// Treat value as raw YAML (for complex/unknown structures)
         #[arg(short, long)]
@@ -338,16 +333,22 @@ enum SerialCommand {
     /// Modify a serial by swapping parts from another serial
     Modify {
         /// Base serial to modify
-        #[arg(short, long)]
         base: String,
 
         /// Source serial to take parts from
-        #[arg(short, long)]
         source: String,
 
         /// Part indices to copy from source (e.g. "4,12" for body and barrel)
-        #[arg(short, long)]
         parts: String,
+    },
+
+    /// Batch decode serials from a file to binary output
+    BatchDecode {
+        /// Input file with one serial per line
+        input: PathBuf,
+
+        /// Output binary file (length-prefixed records)
+        output: PathBuf,
     },
 }
 
@@ -833,6 +834,10 @@ enum ItemsDbCommand {
         /// Mark imported items as legal
         #[arg(long)]
         legal: bool,
+
+        /// Source attribution for imported items
+        #[arg(long)]
+        source: Option<String>,
     },
 
     /// Mark items as legal (verified not modded)
@@ -1644,6 +1649,51 @@ fn main() -> Result<()> {
 
                 println!();
                 println!("New serial: {}", new_serial);
+            }
+
+            SerialCommand::BatchDecode { input, output } => {
+                use std::io::{BufRead, BufReader, BufWriter};
+
+                let file = fs::File::open(&input)
+                    .with_context(|| format!("Failed to open input file: {:?}", input))?;
+                let reader = BufReader::new(file);
+
+                let out_file = fs::File::create(&output)
+                    .with_context(|| format!("Failed to create output file: {:?}", output))?;
+                let mut writer = BufWriter::new(out_file);
+
+                let mut count = 0;
+                let mut errors = 0;
+
+                for line in reader.lines() {
+                    let serial = line.context("Failed to read line")?;
+                    let serial = serial.trim();
+                    if serial.is_empty() {
+                        continue;
+                    }
+
+                    match bl4::ItemSerial::decode(serial) {
+                        Ok(item) => {
+                            // Write length as u16 followed by raw bytes
+                            let bytes = &item.raw_bytes;
+                            let len = bytes.len() as u16;
+                            writer.write_all(&len.to_le_bytes())?;
+                            writer.write_all(bytes)?;
+                            count += 1;
+                        }
+                        Err(_) => {
+                            // Write 0 length to indicate decode failure (keeps alignment)
+                            writer.write_all(&0u16.to_le_bytes())?;
+                            errors += 1;
+                        }
+                    }
+                }
+
+                writer.flush()?;
+                println!(
+                    "Decoded {} serials to {:?} ({} errors)",
+                    count, output, errors
+                );
             }
         },
 
@@ -4922,13 +4972,23 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
             save,
             decode,
             legal,
+            source,
         } => {
+            // Try to extract Steam ID from path first (e.g., .../76561197960521364/...)
             let steam_id = save
                 .to_string_lossy()
                 .split('/')
                 .find(|s| s.len() == 17 && s.chars().all(|c| c.is_ascii_digit()))
                 .map(String::from)
-                .context("Could not extract Steam ID from path")?;
+                .or_else(|| {
+                    // Fall back to reading from steamid file in save's directory
+                    save.parent()
+                        .map(|dir| dir.join("steamid"))
+                        .filter(|p| p.exists())
+                        .and_then(|p| std::fs::read_to_string(p).ok())
+                        .map(|s| s.trim().to_string())
+                })
+                .context("Could not extract Steam ID from path or steamid file")?;
 
             let save_data = std::fs::read(&save)?;
             let yaml_data = bl4::decrypt_sav(&save_data, &steam_id)?;
@@ -5014,6 +5074,16 @@ fn handle_items_db_command(cmd: ItemsDbCommand, db: &PathBuf) -> Result<()> {
                     }
                 }
                 println!("Marked {} items as legal", marked);
+            }
+
+            if let Some(src) = source {
+                let mut updated = 0;
+                for serial in &serials {
+                    if wdb.set_source(serial, &src).is_ok() {
+                        updated += 1;
+                    }
+                }
+                println!("Set source '{}' for {} items", src, updated);
             }
         }
 
