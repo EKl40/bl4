@@ -166,6 +166,15 @@ jobs:
       - name: Build bl4 wasm package
         run: wasm-pack build src/bl4 --target web --features wasm --out-dir ../../pkg/bl4-wasm
 
+      - name: Create tarball
+        run: tar -czvf bl4-wasm.tar.gz -C pkg bl4-wasm
+
+      - name: Upload wasm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bl4-wasm
+          path: bl4-wasm.tar.gz
+
       - name: Extract version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
@@ -180,15 +189,6 @@ jobs:
         run: npm publish pkg/bl4-wasm --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Create tarball
-        run: tar -czvf bl4-wasm.tar.gz -C pkg bl4-wasm
-
-      - name: Upload wasm artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: bl4-wasm
-          path: bl4-wasm.tar.gz
 
   upload-release:
     name: Upload to GitHub Release
