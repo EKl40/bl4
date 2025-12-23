@@ -174,7 +174,12 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build bl4 wasm package
-        run: wasm-pack build src/bl4 --target web --features wasm --out-dir ../../pkg/bl4-wasm
+        run: |
+          cd src/bl4
+          wasm-pack build --target web --features wasm
+          cd ../..
+          mkdir -p pkg
+          mv src/bl4/pkg pkg/bl4-wasm
 
       - name: Create tarball
         run: tar -czvf bl4-wasm.tar.gz -C pkg bl4-wasm
