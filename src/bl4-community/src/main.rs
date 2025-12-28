@@ -3,6 +3,9 @@
 //! REST API for the Borderlands 4 items database, allowing community
 //! contributions and item lookups.
 
+// API server with complex request handlers
+#![allow(clippy::too_many_lines)]
+
 use std::sync::Arc;
 
 use axum::{
