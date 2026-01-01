@@ -87,8 +87,8 @@ static SERIAL_TO_PARTS_CAT: phf::Map<u64, u64> = phf_map! {
     11u64 => 13,  // DAD_AR
     15u64 => 18,  // ORD_AR
 
-    // Snipers (high IDs)
-    128u64 => 27, // VLA_SR
+    // Snipers (high IDs) - VLA_SR and BOR_SR share category 25
+    128u64 => 25, // VLA_SR
     129u64 => 26, // JAK_SR
     133u64 => 28, // ORD_SR
     137u64 => 29, // MAL_SR
