@@ -41,14 +41,33 @@ pub fn decode_all(db: &Path, force: bool) -> Result<()> {
                     .and_then(bl4::parts::level_from_code)
                     .map(|(capped, _raw)| capped as i32);
 
+                // Extract element and rarity
+                let element = decoded_item.element_names();
+                let rarity = decoded_item.rarity_name().map(|s| s.to_string());
+
                 let update = bl4_idb::ItemUpdate {
                     manufacturer: mfg,
                     weapon_type: wtype,
                     level,
+                    element,
+                    rarity,
                     ..Default::default()
                 };
                 wdb.update_item(&item.serial, &update)?;
                 wdb.set_item_type(&item.serial, &decoded_item.item_type.to_string())?;
+
+                // Store parts summary as a value
+                let parts_summary = decoded_item.parts_summary();
+                if !parts_summary.is_empty() {
+                    let _ = wdb.set_value(
+                        &item.serial,
+                        "parts",
+                        &parts_summary,
+                        bl4_idb::ValueSource::Decoder,
+                        Some("bl4-cli"),
+                        bl4_idb::Confidence::Inferred,
+                    );
+                }
 
                 if item.verification_status == bl4_idb::VerificationStatus::Unverified {
                     wdb.set_verification_status(
@@ -160,6 +179,46 @@ pub fn decode(db: &Path, serial: Option<String>, all: bool) -> Result<()> {
                 )?;
                 values_set += 1;
 
+                // Extract element
+                if let Some(elements) = item.element_names() {
+                    wdb.set_value(
+                        serial,
+                        "element",
+                        &elements,
+                        bl4_idb::ValueSource::Decoder,
+                        Some("bl4-cli"),
+                        bl4_idb::Confidence::Inferred,
+                    )?;
+                    values_set += 1;
+                }
+
+                // Extract rarity
+                if let Some(rarity) = item.rarity_name() {
+                    wdb.set_value(
+                        serial,
+                        "rarity",
+                        rarity,
+                        bl4_idb::ValueSource::Decoder,
+                        Some("bl4-cli"),
+                        bl4_idb::Confidence::Inferred,
+                    )?;
+                    values_set += 1;
+                }
+
+                // Extract parts summary
+                let parts_summary = item.parts_summary();
+                if !parts_summary.is_empty() {
+                    wdb.set_value(
+                        serial,
+                        "parts",
+                        &parts_summary,
+                        bl4_idb::ValueSource::Decoder,
+                        Some("bl4-cli"),
+                        bl4_idb::Confidence::Inferred,
+                    )?;
+                    values_set += 1;
+                }
+
                 decoded_count += 1;
             }
             Err(e) => {
@@ -251,13 +310,32 @@ pub fn import_save(
                     .and_then(bl4::parts::level_from_code)
                     .map(|(capped, _)| capped as i32);
 
+                // Extract element and rarity
+                let element = decoded_item.element_names();
+                let rarity = decoded_item.rarity_name().map(|s| s.to_string());
+
                 let update = bl4_idb::ItemUpdate {
                     manufacturer: mfg,
                     weapon_type: wtype,
                     level,
+                    element,
+                    rarity,
                     ..Default::default()
                 };
                 let _ = wdb.update_item(&item.serial, &update);
+
+                // Store parts summary as a value
+                let parts_summary = decoded_item.parts_summary();
+                if !parts_summary.is_empty() {
+                    let _ = wdb.set_value(
+                        &item.serial,
+                        "parts",
+                        &parts_summary,
+                        bl4_idb::ValueSource::Decoder,
+                        Some("bl4-cli"),
+                        bl4_idb::Confidence::Inferred,
+                    );
+                }
 
                 if item.verification_status == bl4_idb::VerificationStatus::Unverified {
                     let _ = wdb.set_verification_status(
