@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn test_handle_dump_usmap_empty_source() {
         let source = MockMemorySource::new(vec![], 0x1000);
-        let output = std::path::PathBuf::from("/tmp/test.usmap");
+        let output = std::env::temp_dir().join("test.usmap");
         // Will fail to find GNames
         let result = handle_dump_usmap(&source, &output);
         assert!(result.is_err());
@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn test_handle_dump_parts_empty_source() {
         let source = MockMemorySource::new(vec![0u8; 1024], 0x1000);
-        let output = std::path::PathBuf::from("/tmp/test_parts.json");
+        let output = std::env::temp_dir().join("test_parts.json");
         // Should complete with empty results
         let result = handle_dump_parts(&source, &output);
         assert!(result.is_ok());

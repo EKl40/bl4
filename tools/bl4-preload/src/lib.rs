@@ -2,6 +2,8 @@
 //!
 //! Captures file reads/writes to detect NCS file access and extraction.
 //!
+//! This is a Linux-only tool that uses LD_PRELOAD to intercept libc calls.
+//!
 //! Usage:
 //!   LD_PRELOAD=/path/to/libbl4_preload.so ./ncs_extractor
 //!
@@ -10,6 +12,9 @@
 //!   BL4_PRELOAD_CAPTURE=<dir>  - Directory to save captured file writes
 //!   BL4_PRELOAD_FILTER=<pat>   - Only capture files matching pattern (e.g., "*.json,*.ncs")
 //!   BL4_PRELOAD_STACKS=1       - Log full stack traces
+
+// This crate only compiles on Linux - LD_PRELOAD is a Linux/Unix-specific feature
+#![cfg(target_os = "linux")]
 
 use backtrace::Backtrace;
 use libc::{c_char, c_int, c_void, mode_t, off_t, size_t, ssize_t, O_CREAT, O_WRONLY};
