@@ -8,7 +8,7 @@
 //! Maps category IDs to human-readable names:
 //!
 //! ```json
-#![doc = include_str!("../lib/manifest/category_names.json")]
+#![doc = include_str!("../../../share/manifest/category_names.json")]
 //! ```
 //!
 //! ## Manufacturers
@@ -16,7 +16,7 @@
 //! Maps manufacturer codes to full names:
 //!
 //! ```json
-#![doc = include_str!("../lib/manifest/manufacturers.json")]
+#![doc = include_str!("../../../share/manifest/manufacturers.json")]
 //! ```
 //!
 //! ## Weapon Types
@@ -24,7 +24,7 @@
 //! Maps weapon types to their valid manufacturers:
 //!
 //! ```json
-#![doc = include_str!("../lib/manifest/weapon_types.json")]
+#![doc = include_str!("../../../share/manifest/weapon_types.json")]
 //! ```
 
 use once_cell::sync::Lazy;
@@ -32,10 +32,10 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 // Embed manifest JSON files at compile time
-const CATEGORY_NAMES_JSON: &str = include_str!("../lib/manifest/category_names.json");
-const PARTS_DATABASE_JSON: &str = include_str!("../lib/manifest/parts_database.json");
-const MANUFACTURERS_JSON: &str = include_str!("../lib/manifest/manufacturers.json");
-const WEAPON_TYPES_JSON: &str = include_str!("../lib/manifest/weapon_types.json");
+const CATEGORY_NAMES_JSON: &str = include_str!("../../../share/manifest/category_names.json");
+const PARTS_DATABASE_JSON: &str = include_str!("../../../share/manifest/parts_database.json");
+const MANUFACTURERS_JSON: &str = include_str!("../../../share/manifest/manufacturers.json");
+const WEAPON_TYPES_JSON: &str = include_str!("../../../share/manifest/weapon_types.json");
 
 // ============================================================================
 // Data Structures
