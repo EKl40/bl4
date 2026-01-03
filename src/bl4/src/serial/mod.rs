@@ -8,14 +8,16 @@
 //! 3. Decoded bytes have mirrored bits
 //! 4. Data is a variable-length bitstream with tokens
 
+mod base85;
+mod bitstream;
+
+use base85::{decode_base85, encode_base85, mirror_byte};
+use bitstream::{BitReader, BitWriter};
+
 use crate::parts::{
     item_type_name, level_from_code, manufacturer_name, serial_format, serial_id_to_parts_category,
     weapon_info_from_first_varint,
 };
-
-/// Custom Base85 alphabet used by Borderlands 4
-const BL4_BASE85_ALPHABET: &[u8; 85] =
-    b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{/}~";
 
 /// Element types for weapons
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,157 +137,6 @@ pub enum SerialError {
     UnknownItemType(char),
 }
 
-/// Bitstream reader for parsing variable-length tokens
-struct BitReader {
-    bytes: Vec<u8>,
-    bit_offset: usize,
-}
-
-/// Bitstream writer for encoding variable-length tokens
-struct BitWriter {
-    bytes: Vec<u8>,
-    bit_offset: usize,
-}
-
-impl BitWriter {
-    fn new() -> Self {
-        Self {
-            bytes: Vec::new(),
-            bit_offset: 0,
-        }
-    }
-
-    /// Write N bits from a u64 value (MSB-first)
-    fn write_bits(&mut self, value: u64, count: usize) {
-        for i in (0..count).rev() {
-            let bit = ((value >> i) & 1) as u8;
-            let byte_idx = self.bit_offset / 8;
-            let bit_idx = 7 - (self.bit_offset % 8); // Write from MSB (bit 7) down to LSB (bit 0)
-
-            // Extend bytes vector if needed
-            while byte_idx >= self.bytes.len() {
-                self.bytes.push(0);
-            }
-
-            if bit == 1 {
-                self.bytes[byte_idx] |= 1 << bit_idx;
-            }
-            self.bit_offset += 1;
-        }
-    }
-
-    /// Write a VARINT (4-bit nibbles with continuation bits)
-    fn write_varint(&mut self, value: u64) {
-        let mut remaining = value;
-
-        loop {
-            let nibble = remaining & 0xF;
-            remaining >>= 4;
-
-            self.write_bits(nibble, 4);
-
-            if remaining == 0 {
-                self.write_bits(0, 1); // Continuation = 0 (stop)
-                break;
-            } else {
-                self.write_bits(1, 1); // Continuation = 1 (more)
-            }
-        }
-    }
-
-    /// Write a VARBIT (5-bit length prefix + variable data)
-    fn write_varbit(&mut self, value: u64) {
-        if value == 0 {
-            self.write_bits(0, 5); // Length 0 means value 0
-            return;
-        }
-
-        // Calculate number of bits needed
-        let bits_needed = 64 - value.leading_zeros() as usize;
-        self.write_bits(bits_needed as u64, 5);
-        self.write_bits(value, bits_needed);
-    }
-
-    /// Get the final bytes (padded to byte boundary)
-    fn finish(self) -> Vec<u8> {
-        self.bytes
-    }
-}
-
-impl BitReader {
-    fn new(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes,
-            bit_offset: 0,
-        }
-    }
-
-    /// Read N bits as a u64 value (MSB-first)
-    /// Bits are read from the stream and assembled with first bit = MSB
-    fn read_bits(&mut self, count: usize) -> Option<u64> {
-        if count > 64 {
-            return None;
-        }
-
-        let mut result = 0u64;
-        for _ in 0..count {
-            let byte_idx = self.bit_offset / 8;
-            let bit_idx = 7 - (self.bit_offset % 8); // Read from MSB (bit 7) down to LSB (bit 0)
-
-            if byte_idx >= self.bytes.len() {
-                return None;
-            }
-
-            let bit = (self.bytes[byte_idx] >> bit_idx) & 1;
-            result = (result << 1) | (bit as u64);
-            self.bit_offset += 1;
-        }
-
-        Some(result)
-    }
-
-    /// Read a VARINT (4-bit nibbles with continuation bits)
-    /// Format: [4-bit value][1-bit continuation]... Values assembled LSB-first.
-    /// Continuation bit 1 = more nibbles follow, 0 = stop.
-    fn read_varint(&mut self) -> Option<u64> {
-        let mut result = 0u64;
-        let mut shift = 0;
-
-        // Max 4 nibbles (16 bits total)
-        for _ in 0..4 {
-            let nibble = self.read_bits(4)?;
-            result |= nibble << shift;
-            shift += 4;
-
-            // Read continuation bit (1 = continue, 0 = stop)
-            let cont = self.read_bits(1)?;
-            if cont == 0 {
-                return Some(result);
-            }
-        }
-
-        Some(result)
-    }
-
-    /// Read a VARBIT (5-bit length prefix + variable data)
-    /// Format: [5-bit length][N-bit value]. Length 0 means value is 0.
-    fn read_varbit(&mut self) -> Option<u64> {
-        let length = self.read_bits(5)? as usize;
-        self.read_bits(length)
-    }
-
-    #[allow(dead_code)]
-    fn current_bit_offset(&self) -> usize {
-        self.bit_offset
-    }
-
-    /// Returns the number of bits remaining in the stream
-    fn remaining_bits(&self) -> usize {
-        let total_bits = self.bytes.len() * 8;
-        total_bits.saturating_sub(self.bit_offset)
-    }
-}
-
 /// Token types in the bitstream
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -325,88 +176,6 @@ pub struct ItemSerial {
     pub elements: Vec<Element>,
     /// Detected rarity (from level code or equipment VarBit)
     pub rarity: Option<Rarity>,
-}
-
-/// Decode Base85 with custom BL4 alphabet
-fn decode_base85(input: &str) -> Result<Vec<u8>, SerialError> {
-    // Build reverse lookup table
-    let mut lookup = [0u8; 256];
-    for (i, &ch) in BL4_BASE85_ALPHABET.iter().enumerate() {
-        lookup[ch as usize] = i as u8;
-    }
-
-    let mut result = Vec::new();
-    let chars: Vec<char> = input.chars().collect();
-
-    // Process in chunks of 5 characters -> 4 bytes
-    for chunk in chars.chunks(5) {
-        let mut value: u64 = 0;
-
-        // For partial chunks, pad with highest value (84 = 'u') to make 5 chars
-        // This ensures we decode to the most significant bytes
-        for &ch in chunk.iter() {
-            let byte_val = lookup[ch as usize] as u64;
-            value = value * 85 + byte_val;
-        }
-        // Pad remaining positions with 84 (highest value)
-        for _ in chunk.len()..5 {
-            value = value * 85 + 84;
-        }
-
-        // Extract bytes from most significant first
-        let num_bytes = if chunk.len() == 5 { 4 } else { chunk.len() - 1 };
-        for i in (0..num_bytes).rev() {
-            // For partial chunks, extract from high bytes (shift by 24, 16, etc.)
-            let shift = if chunk.len() == 5 {
-                i * 8
-            } else {
-                (3 - (num_bytes - 1 - i)) * 8
-            };
-            result.push(((value >> shift) & 0xFF) as u8);
-        }
-    }
-
-    Ok(result)
-}
-
-/// Mirror bits in a byte (reverse bit order)
-/// Example: 0b10000111 -> 0b11100001
-#[inline]
-fn mirror_byte(byte: u8) -> u8 {
-    byte.reverse_bits()
-}
-
-/// Encode bytes to Base85 with custom BL4 alphabet
-fn encode_base85(bytes: &[u8]) -> String {
-    let mut result = String::new();
-
-    // Process in chunks of 4 bytes -> 5 characters
-    for chunk in bytes.chunks(4) {
-        // Build value from bytes (big-endian), pad with zeros to 4 bytes
-        let mut value: u64 = 0;
-        for &byte in chunk {
-            value = (value << 8) | (byte as u64);
-        }
-        // Pad partial chunks with zeros (shift left to fill 4 bytes)
-        if chunk.len() < 4 {
-            value <<= (4 - chunk.len()) * 8;
-        }
-
-        // Convert to 5 base85 chars, then take first N+1 for partial chunks
-        let mut chars = [0u8; 5];
-        for i in (0..5).rev() {
-            chars[i] = BL4_BASE85_ALPHABET[(value % 85) as usize];
-            value /= 85;
-        }
-
-        // Take first N+1 chars for partial chunks
-        let num_chars = if chunk.len() == 4 { 5 } else { chunk.len() + 1 };
-        for &ch in &chars[0..num_chars] {
-            result.push(ch as char);
-        }
-    }
-
-    result
 }
 
 /// Encode tokens back to bitstream bytes
@@ -1181,22 +950,6 @@ mod tests {
     }
 
     #[test]
-    fn test_base85_decode() {
-        // Test basic Base85 decoding
-        let result = decode_base85("g").unwrap();
-        assert_eq!(result.len(), 0); // Single char decodes to 0 bytes with partial chunk
-    }
-
-    #[test]
-    fn test_mirror_byte() {
-        assert_eq!(mirror_byte(0b10000000), 0b00000001);
-        assert_eq!(mirror_byte(0b11000000), 0b00000011);
-        assert_eq!(mirror_byte(0b10101010), 0b01010101);
-        assert_eq!(mirror_byte(0b00000000), 0b00000000);
-        assert_eq!(mirror_byte(0b11111111), 0b11111111);
-    }
-
-    #[test]
     fn test_part_group_id_extraction() {
         // Weapon serial - Vladof SMG (group 22)
         let item = ItemSerial::decode("@Ugr$ZCm/&tH!t{KgK/Shxu>k").unwrap();
@@ -1323,7 +1076,6 @@ mod tests {
         assert_eq!(item.element_names(), None);
     }
 
-    // Tests for Rarity enum
     mod rarity_tests {
         use super::*;
 
@@ -1338,65 +1090,52 @@ mod tests {
 
         #[test]
         fn test_from_equipment_varbit_common() {
-            // Bits 6-7 = 0 -> Common
             let rarity = Rarity::from_equipment_varbit(0, 384);
             assert_eq!(rarity, Some(Rarity::Common));
         }
 
         #[test]
         fn test_from_equipment_varbit_epic() {
-            // Bits 6-7 = 1 -> Epic (64 >> 6 = 1)
             let rarity = Rarity::from_equipment_varbit(64, 384);
             assert_eq!(rarity, Some(Rarity::Epic));
         }
 
         #[test]
         fn test_from_equipment_varbit_legendary() {
-            // Bits 6-7 = 3 -> Legendary (192 >> 6 = 3)
             let rarity = Rarity::from_equipment_varbit(192, 384);
             assert_eq!(rarity, Some(Rarity::Legendary));
         }
 
         #[test]
         fn test_from_equipment_varbit_zero_divisor() {
-            // Zero divisor should return None
             let rarity = Rarity::from_equipment_varbit(100, 0);
             assert_eq!(rarity, None);
         }
 
         #[test]
         fn test_from_weapon_level_code_common() {
-            // Level codes <= 145 are Common
             assert_eq!(Rarity::from_weapon_level_code(128), Some(Rarity::Common));
             assert_eq!(Rarity::from_weapon_level_code(145), Some(Rarity::Common));
         }
 
         #[test]
         fn test_from_weapon_level_code_epic() {
-            // Code 192 = Epic
             assert_eq!(Rarity::from_weapon_level_code(192), Some(Rarity::Epic));
         }
 
         #[test]
         fn test_from_weapon_level_code_legendary() {
-            // Code 200 = Legendary
             assert_eq!(Rarity::from_weapon_level_code(200), Some(Rarity::Legendary));
         }
 
         #[test]
         fn test_from_weapon_level_code_ranges() {
-            // Uncommon range: 146-180
             assert_eq!(Rarity::from_weapon_level_code(150), Some(Rarity::Uncommon));
-
-            // Epic range: 181-195
             assert_eq!(Rarity::from_weapon_level_code(185), Some(Rarity::Epic));
-
-            // Legendary range: 196+
             assert_eq!(Rarity::from_weapon_level_code(210), Some(Rarity::Legendary));
         }
     }
 
-    // Tests for ItemSerial display methods
     mod display_tests {
         use super::*;
 
@@ -1405,7 +1144,6 @@ mod tests {
             let item = ItemSerial::decode("@Ugr$ZCm/&tH!t{KgK/Shxu>k").unwrap();
             let hex = item.hex_dump();
 
-            // Should be a valid hex string (even length, hex chars only)
             assert!(!hex.is_empty());
             assert!(hex.len() % 2 == 0);
             assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
@@ -1416,10 +1154,7 @@ mod tests {
             let item = ItemSerial::decode("@Ugr$ZCm/&tH!t{KgK/Shxu>k").unwrap();
             let formatted = item.format_tokens();
 
-            // Should produce a non-empty string
             assert!(!formatted.is_empty());
-
-            // Should contain at least a separator (|) and a part marker ({})
             assert!(formatted.contains('|') || formatted.contains('{'));
         }
 
@@ -1428,21 +1163,17 @@ mod tests {
             let item = ItemSerial::decode("@Uge98>m/)}}!c5JeNWCvCXc7").unwrap();
             let formatted = item.format_tokens();
 
-            // Formatted tokens should be parseable - contains VarInt/VarBit values
-            // and separators
             assert!(!formatted.is_empty());
         }
 
         #[test]
         fn test_item_type_description_weapon() {
-            // Hellwalker - type 'd' which is a VarInt-first weapon
             let item = ItemSerial::decode("@Ugd_t@FmVuJyjIXzRG}JG7S$K^1{DjH5&-").unwrap();
             assert_eq!(item.item_type_description(), "Weapon");
         }
 
         #[test]
         fn test_item_type_description_shield() {
-            // Type 'r' is VarBit-first (shields/items)
             let item = ItemSerial::decode("@Ugr$N8m/)}}!q9r4K/ShxuK@").unwrap();
             assert_eq!(item.item_type_description(), "Item");
         }
@@ -1450,13 +1181,11 @@ mod tests {
         #[test]
         fn test_item_type_description_equipment() {
             let item = ItemSerial::decode("@Uge98>m/)}}!c5JeNWCvCXc7").unwrap();
-            // Equipment items return "Item" from item_type_name
             assert_eq!(item.item_type_description(), "Item");
         }
 
         #[test]
         fn test_item_type_description_class_mod() {
-            // Class mod - type '!'
             let item =
                 ItemSerial::decode("@Ug!pHG2}TYgjMfjzn~K!T)XUVX)U4Eu)Qi+?RPAVZh!@!b00").unwrap();
             assert_eq!(item.item_type_description(), "Class Mod");
@@ -1464,9 +1193,7 @@ mod tests {
 
         #[test]
         fn test_manufacturer_name_known() {
-            // Vladof SMG
             let item = ItemSerial::decode("@Ugr$ZCm/&tH!t{KgK/Shxu>k").unwrap();
-            // The manufacturer ID maps to a known manufacturer
             if let Some(name) = item.manufacturer_name() {
                 assert!(!name.is_empty());
             }
@@ -1474,10 +1201,8 @@ mod tests {
 
         #[test]
         fn test_rarity_name_method() {
-            // Weapon with detectable rarity
             let item = ItemSerial::decode("@Ugr$ZCm/&tH!t{KgK/Shxu>k").unwrap();
             if let Some(rarity) = item.rarity_name() {
-                // Should be one of the valid rarity names
                 let valid = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
                 assert!(valid.contains(&rarity));
             }
@@ -1485,7 +1210,6 @@ mod tests {
 
         #[test]
         fn test_weapon_info_for_weapon() {
-            // Known weapon serial
             let item = ItemSerial::decode("@Ugr$ZCm/&tH!t{KgK/Shxu>k").unwrap();
             if let Some((mfg, wtype)) = item.weapon_info() {
                 assert!(!mfg.is_empty());
@@ -1495,16 +1219,12 @@ mod tests {
 
         #[test]
         fn test_weapon_info_for_equipment() {
-            // Equipment doesn't have weapon info
             let item = ItemSerial::decode("@Uge98>m/)}}!c5JeNWCvCXc7").unwrap();
-            // May or may not return info depending on format detection
-            // Just verify it doesn't panic
             let _ = item.weapon_info();
         }
 
         #[test]
         fn test_parts_category() {
-            // Weapon serial - should have parts category
             let item = ItemSerial::decode("@Ugr$ZCm/&tH!t{KgK/Shxu>k").unwrap();
             let category = item.parts_category();
             assert!(category.is_some());
@@ -1515,66 +1235,11 @@ mod tests {
             let item = ItemSerial::decode("@Ugr$ZCm/&tH!t{KgK/Shxu>k").unwrap();
             let dump = item.detailed_dump();
 
-            // Should contain serial info
             assert!(dump.contains("Serial:"));
             assert!(dump.contains("Item type:"));
             assert!(dump.contains("Bytes:"));
             assert!(dump.contains("Tokens:"));
             assert!(dump.contains("Raw bytes:"));
-        }
-    }
-
-    // Tests for BitReader and BitWriter
-    mod bitstream_tests {
-        use super::*;
-
-        #[test]
-        fn test_varint_roundtrip() {
-            // Test various values
-            for value in [0u64, 1, 15, 16, 255, 1000, 65535] {
-                let mut writer = BitWriter::new();
-                writer.write_varint(value);
-                let bytes = writer.finish();
-
-                let mut reader = BitReader::new(bytes);
-                let read_value = reader.read_varint().unwrap();
-                assert_eq!(read_value, value, "VarInt roundtrip failed for {}", value);
-            }
-        }
-
-        #[test]
-        fn test_varbit_roundtrip() {
-            // Test various values
-            for value in [0u64, 1, 7, 8, 31, 32, 127, 1000] {
-                let mut writer = BitWriter::new();
-                writer.write_varbit(value);
-                let bytes = writer.finish();
-
-                let mut reader = BitReader::new(bytes);
-                let read_value = reader.read_varbit().unwrap();
-                assert_eq!(read_value, value, "VarBit roundtrip failed for {}", value);
-            }
-        }
-
-        #[test]
-        fn test_bits_roundtrip() {
-            // Test fixed-width bit values
-            let mut writer = BitWriter::new();
-            writer.write_bits(0b1010, 4);
-            writer.write_bits(0b11111111, 8);
-            writer.write_bits(0b101, 3);
-            let bytes = writer.finish();
-
-            let mut reader = BitReader::new(bytes);
-            assert_eq!(reader.read_bits(4), Some(0b1010));
-            assert_eq!(reader.read_bits(8), Some(0b11111111));
-            assert_eq!(reader.read_bits(3), Some(0b101));
-        }
-
-        #[test]
-        fn test_remaining_bits() {
-            let reader = BitReader::new(vec![0xFF, 0xFF]);
-            assert_eq!(reader.remaining_bits(), 16);
         }
     }
 }
