@@ -232,6 +232,47 @@ pub fn extract_all<R: NcsReader>(reader: &mut R) -> Result<Vec<ExtractedNcs>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    /// Get the default pak file path for tests
+    fn default_pak() -> Option<PathBuf> {
+        // Check environment variable first
+        if let Ok(dir) = std::env::var("BL4_PAKS_DIR") {
+            let path = PathBuf::from(dir).join("pakchunk0-Windows_0_P.pak");
+            if path.exists() {
+                return Some(path);
+            }
+        }
+
+        // Platform-specific defaults
+        #[cfg(target_os = "windows")]
+        let default = PathBuf::from(
+            r"C:\Program Files (x86)\Steam\steamapps\common\Borderlands 4\OakGame\Content\Paks\pakchunk0-Windows_0_P.pak",
+        );
+
+        #[cfg(target_os = "linux")]
+        let default = dirs::home_dir()
+            .map(|h| {
+                h.join(".local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak")
+            })
+            .unwrap_or_default();
+
+        #[cfg(target_os = "macos")]
+        let default = dirs::home_dir()
+            .map(|h| {
+                h.join("Library/Application Support/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak")
+            })
+            .unwrap_or_default();
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+        let default = PathBuf::new();
+
+        if default.exists() {
+            Some(default)
+        } else {
+            None
+        }
+    }
 
     #[test]
     fn test_type_from_filename() {
@@ -250,14 +291,12 @@ mod tests {
 
     #[test]
     fn test_pak_reader_real() {
-        let pak_path = std::path::Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak");
-
-        if !pak_path.exists() {
+        let Some(pak_path) = default_pak() else {
             println!("PAK file not found, skipping test");
             return;
-        }
+        };
 
-        let mut reader = PakReader::open(pak_path).expect("open PAK");
+        let mut reader = PakReader::open(&pak_path).expect("open PAK");
         let ncs_files = reader.list_ncs_files().expect("list NCS files");
 
         println!("Found {} NCS files in PAK index", ncs_files.len());
@@ -284,13 +323,11 @@ mod tests {
 
     #[test]
     fn test_extract_all_real() {
-        let pak_path = std::path::Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak");
-
-        if !pak_path.exists() {
+        let Some(pak_path) = default_pak() else {
             return;
-        }
+        };
 
-        let mut reader = PakReader::open(pak_path).expect("open PAK");
+        let mut reader = PakReader::open(&pak_path).expect("open PAK");
         let extracted = extract_all(&mut reader).expect("extract all");
 
         println!("Extracted {} NCS files", extracted.len());
@@ -308,14 +345,12 @@ mod tests {
 
     #[test]
     fn test_previously_missing_types() {
-        let pak_path = std::path::Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak");
-
-        if !pak_path.exists() {
+        let Some(pak_path) = default_pak() else {
             println!("PAK not found, skipping");
             return;
-        }
+        };
 
-        let reader = PakReader::open(pak_path).expect("open PAK");
+        let reader = PakReader::open(&pak_path).expect("open PAK");
         let files = reader.list_ncs_files().expect("list");
 
         // These 6 types were missing with magic byte scanning

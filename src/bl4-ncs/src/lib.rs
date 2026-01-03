@@ -201,14 +201,78 @@ mod tests {
     }
 }
 
+/// Test utilities for integration tests requiring game files
+#[cfg(test)]
+mod test_paths {
+    use std::path::PathBuf;
+
+    /// Get the Borderlands 4 paks directory.
+    ///
+    /// Checks `BL4_PAKS_DIR` environment variable first, then falls back to
+    /// platform-specific default Steam installation paths.
+    pub fn paks_dir() -> Option<PathBuf> {
+        // Check environment variable first
+        if let Ok(dir) = std::env::var("BL4_PAKS_DIR") {
+            let path = PathBuf::from(dir);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+
+        // Platform-specific defaults
+        #[cfg(target_os = "windows")]
+        let default = PathBuf::from(
+            r"C:\Program Files (x86)\Steam\steamapps\common\Borderlands 4\OakGame\Content\Paks",
+        );
+
+        #[cfg(target_os = "linux")]
+        let default = dirs::home_dir()
+            .map(|h| {
+                h.join(".local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks")
+            })
+            .unwrap_or_default();
+
+        #[cfg(target_os = "macos")]
+        let default = dirs::home_dir()
+            .map(|h| {
+                h.join("Library/Application Support/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks")
+            })
+            .unwrap_or_default();
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+        let default = PathBuf::new();
+
+        if default.exists() {
+            Some(default)
+        } else {
+            None
+        }
+    }
+
+    /// Get the default pak file (pakchunk0) path
+    pub fn default_pak() -> Option<PathBuf> {
+        paks_dir().map(|d| d.join("pakchunk0-Windows_0_P.pak"))
+    }
+
+    /// Get a test output directory (uses BL4_TEST_OUTPUT or temp dir)
+    pub fn test_output_dir() -> PathBuf {
+        std::env::var("BL4_TEST_OUTPUT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir().join("bl4_ncs_test"))
+    }
+}
+
 #[cfg(test)]
 mod investigate_failures {
+    use super::test_paths;
     use crate::data::{decompress, scan};
-    use std::path::Path;
 
     #[test]
     fn find_v1_failures() {
-        let paks_dir = Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks");
+        let Some(paks_dir) = test_paths::paks_dir() else {
+            println!("Paks directory not found, skipping test");
+            return;
+        };
 
         if let Ok(entries) = std::fs::read_dir(paks_dir) {
             for entry in entries.flatten() {
@@ -239,14 +303,17 @@ mod investigate_failures {
 
 #[cfg(test)]
 mod parse_real_ncs {
+    use super::test_paths;
     use crate::data::{decompress, scan};
     use crate::content::Content;
-    use std::path::Path;
 
     #[test]
     fn parse_first_10_ncs() {
-        let pak_path = Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak");
-        
+        let Some(pak_path) = test_paths::default_pak() else {
+            println!("Pak file not found, skipping test");
+            return;
+        };
+
         if !pak_path.exists() {
             println!("Pak file not found, skipping test");
             return;
@@ -302,14 +369,16 @@ mod parse_real_ncs {
 
 #[cfg(test)]
 mod correlate_manifest {
+    use super::test_paths;
     use crate::data::{decompress, scan};
     use crate::manifest::scan as scan_manifests;
     use crate::content::Content;
-    use std::path::Path;
 
     #[test]
     fn find_missing_chunks() {
-        let pak_path = Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak");
+        let Some(pak_path) = test_paths::default_pak() else {
+            return;
+        };
 
         if !pak_path.exists() {
             return;
@@ -365,7 +434,9 @@ mod correlate_manifest {
 
     #[test]
     fn correlate_manifest_to_chunks() {
-        let pak_path = Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak");
+        let Some(pak_path) = test_paths::default_pak() else {
+            return;
+        };
 
         if !pak_path.exists() {
             return;
@@ -432,17 +503,15 @@ mod correlate_manifest {
 
 #[cfg(test)]
 mod scan_all_paks {
+    use super::test_paths;
     use crate::data::scan;
     use crate::manifest::scan as scan_manifests;
-    use std::path::Path;
 
     #[test]
     fn scan_all_pak_ncs() {
-        let paks_dir = Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks");
-
-        if !paks_dir.exists() {
+        let Some(paks_dir) = test_paths::paks_dir() else {
             return;
-        }
+        };
 
         println!("\n{:<45} {:>8} {:>10}", "Pak File", "Chunks", "Manifest");
         println!("{}", "-".repeat(65));
@@ -481,12 +550,14 @@ mod scan_all_paks {
 
 #[cfg(test)]
 mod test_extraction {
+    use super::test_paths;
     use crate::extract::extract_from_pak;
-    use std::path::Path;
 
     #[test]
     fn test_real_pak_extraction() {
-        let pak_path = Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak");
+        let Some(pak_path) = test_paths::default_pak() else {
+            return;
+        };
 
         if !pak_path.exists() {
             return;
@@ -533,12 +604,14 @@ mod test_extraction {
 
 #[cfg(test)]
 mod investigate_missing {
+    use super::test_paths;
     use crate::manifest::scan as scan_manifests;
-    use std::path::Path;
 
     #[test]
     fn check_missing_entries() {
-        let pak_path = Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak");
+        let Some(pak_path) = test_paths::default_pak() else {
+            return;
+        };
 
         if !pak_path.exists() {
             return;
@@ -593,12 +666,14 @@ mod investigate_missing {
 
 #[cfg(test)]
 mod investigate_missing2 {
+    use super::test_paths;
     use crate::data::scan;
-    use std::path::Path;
 
     #[test]
     fn scan_after_last_chunk() {
-        let pak_path = Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak");
+        let Some(pak_path) = test_paths::default_pak() else {
+            return;
+        };
 
         if !pak_path.exists() {
             return;
@@ -647,16 +722,14 @@ mod investigate_missing2 {
 
 #[cfg(test)]
 mod full_mapping {
+    use super::test_paths;
     use crate::extract::extract_from_pak;
-    use std::path::Path;
 
     #[test]
     fn show_full_mapping() {
-        let paks_dir = Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks");
-
-        if !paks_dir.exists() {
+        let Some(paks_dir) = test_paths::paks_dir() else {
             return;
-        }
+        };
 
         let mut total_files = 0;
         let mut total_missing = 0;
@@ -665,7 +738,7 @@ mod full_mapping {
         println!("\n{:<45} {:>6} {:>6} {:>6}", "Pak File", "Files", "Miss", "Orph");
         println!("{}", "=".repeat(70));
 
-        let mut paks: Vec<_> = std::fs::read_dir(paks_dir).unwrap()
+        let mut paks: Vec<_> = std::fs::read_dir(&paks_dir).unwrap()
             .flatten()
             .filter(|e| e.path().extension().map_or(false, |x| x == "pak"))
             .collect();
@@ -700,7 +773,10 @@ mod full_mapping {
 
         println!("\n\nSample mappings from pakchunk0:");
         let pak0 = paks_dir.join("pakchunk0-Windows_0_P.pak");
-        let data = std::fs::read(&pak0).unwrap();
+        let Ok(data) = std::fs::read(&pak0) else {
+            println!("Could not read pakchunk0");
+            return;
+        };
         let result = extract_from_pak(&data);
 
         println!("\n{:<5} {:<12} {:<40}", "Idx", "Offset", "Filename");
@@ -714,17 +790,14 @@ mod full_mapping {
 
 #[cfg(test)]
 mod generate_csv {
+    use super::test_paths;
     use crate::extract::extract_from_pak;
-    use std::path::Path;
-    use std::io::Write;
 
     #[test]
     fn generate_mapping_csv() {
-        let paks_dir = Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks");
-
-        if !paks_dir.exists() {
+        let Some(paks_dir) = test_paths::paks_dir() else {
             return;
-        }
+        };
 
         let mut csv = String::new();
         csv.push_str("pak_file,index,offset,compressed_size,decompressed_size,filename,type_name\n");
@@ -758,9 +831,11 @@ mod generate_csv {
             }
         }
 
-        let out_path = "/home/polar/Documents/Projects/.bl4.info/ncs-mapping.csv";
-        std::fs::write(out_path, &csv).expect("write csv");
-        println!("\nWrote {} bytes to {}", csv.len(), out_path);
+        let out_dir = test_paths::test_output_dir();
+        let _ = std::fs::create_dir_all(&out_dir);
+        let out_path = out_dir.join("ncs-mapping.csv");
+        std::fs::write(&out_path, &csv).expect("write csv");
+        println!("\nWrote {} bytes to {}", csv.len(), out_path.display());
         
         // Show first 20 lines
         println!("\nFirst 20 lines:");
@@ -773,12 +848,12 @@ mod generate_csv {
 
 #[cfg(test)]
 mod test_parser_real {
+    use super::test_paths;
     use crate::parser::parse_document;
-    use std::path::Path;
 
     #[test]
     fn test_parser_on_files() {
-        let test_dir = Path::new("/tmp/ncs_test");
+        let test_dir = test_paths::test_output_dir();
 
         if !test_dir.exists() {
             println!("Test directory not found, skipping");
@@ -831,7 +906,7 @@ mod test_parser_real {
 
     #[test]
     fn test_parser_json_output() {
-        let test_file = Path::new("/tmp/ncs_test/achievement0.bin");
+        let test_file = test_paths::test_output_dir().join("achievement0.bin");
 
         if !test_file.exists() {
             println!("Test file not found, skipping");
@@ -852,12 +927,14 @@ mod test_parser_real {
 
 #[cfg(test)]
 mod investigate_inner_format {
+    use super::test_paths;
     use oozextract::Extractor;
-    use std::path::Path;
 
     #[test]
     fn try_header_offsets() {
-        let pak_path = Path::new("/home/polar/.local/share/Steam/steamapps/common/Borderlands 4/OakGame/Content/Paks/pakchunk0-Windows_0_P.pak");
+        let Some(pak_path) = test_paths::default_pak() else {
+            return;
+        };
 
         if !pak_path.exists() {
             return;
