@@ -211,5 +211,33 @@ pub fn handle_manifest(
     manifest::extract_manifest(&extract_dir, output)?;
     println!("\nManifest files written to {}", output.display());
 
+    // Generate drops manifest from NCS data if available
+    let ncs_dir = output.join("ncs");
+    if ncs_dir.exists() {
+        println!("\n=== Drops Manifest ===\n");
+        println!("Generating drops manifest from NCS data...");
+        match bl4_ncs::generate_drops_manifest(&ncs_dir) {
+            Ok(drops_manifest) => {
+                let drops_path = output.join("drops.json");
+                let drops_json = serde_json::to_string_pretty(&drops_manifest)?;
+                fs::write(&drops_path, drops_json)?;
+                println!(
+                    "  Wrote {} drops from {} sources to {}",
+                    drops_manifest.drops.len(),
+                    drops_manifest
+                        .drops
+                        .iter()
+                        .map(|d| &d.source)
+                        .collect::<std::collections::HashSet<_>>()
+                        .len(),
+                    drops_path.display()
+                );
+            }
+            Err(e) => {
+                eprintln!("  Warning: Failed to generate drops manifest: {}", e);
+            }
+        }
+    }
+
     Ok(())
 }
