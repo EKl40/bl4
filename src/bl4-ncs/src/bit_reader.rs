@@ -137,7 +137,6 @@ impl<'a> BitReader<'a> {
 }
 
 /// Calculate minimum bits needed to index a table of `count` entries
-/// This matches NcsParser's FUN_14002dc00
 pub fn bit_width(count: u32) -> u8 {
     if count < 2 {
         return 1;
