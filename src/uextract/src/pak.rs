@@ -210,6 +210,86 @@ pub fn extract_to_directory<P: AsRef<Path>>(
     Ok(extracted)
 }
 
+/// Statistics from PAK extraction
+#[derive(Debug, Default)]
+pub struct ExtractStats {
+    /// Total PAK files found
+    pub pak_files: usize,
+    /// PAK files successfully opened
+    pub paks_opened: usize,
+    /// PAK files that failed to open
+    pub paks_failed: usize,
+    /// Total files processed
+    pub files_processed: usize,
+    /// Files that failed to read
+    pub files_failed: usize,
+}
+
+/// Extract files from all PAK archives in a directory using a handler callback.
+///
+/// The handler receives (filename, raw data) for each file and can process it
+/// however needed. This allows game-specific processing (like NCS decompression)
+/// to be handled by the caller without coupling uextract to specific games.
+///
+/// # Arguments
+/// * `paks_dir` - Directory containing .pak files
+/// * `extension` - Optional extension filter (e.g., "ncs", "uasset")
+/// * `handler` - Callback receiving (filename: &str, data: Vec<u8>) for each file
+///
+/// # Returns
+/// Statistics about the extraction process
+pub fn extract_with_handler<P, F>(
+    paks_dir: P,
+    extension: Option<&str>,
+    mut handler: F,
+) -> Result<ExtractStats>
+where
+    P: AsRef<Path>,
+    F: FnMut(&str, Vec<u8>) -> Result<()>,
+{
+    let pak_files = find_pak_files(&paks_dir)?;
+    let mut stats = ExtractStats {
+        pak_files: pak_files.len(),
+        ..Default::default()
+    };
+
+    for pak_path in &pak_files {
+        let mut reader = match PakReader::open(pak_path) {
+            Ok(r) => {
+                stats.paks_opened += 1;
+                r
+            }
+            Err(_) => {
+                stats.paks_failed += 1;
+                continue;
+            }
+        };
+
+        let files = match extension {
+            Some(ext) => reader.files_with_extension(ext),
+            None => reader.files(),
+        };
+
+        for filename in &files {
+            let data = match reader.read(filename) {
+                Ok(d) => d,
+                Err(_) => {
+                    stats.files_failed += 1;
+                    continue;
+                }
+            };
+
+            if handler(filename, data).is_ok() {
+                stats.files_processed += 1;
+            } else {
+                stats.files_failed += 1;
+            }
+        }
+    }
+
+    Ok(stats)
+}
+
 /// Scan a directory for PAK files
 pub fn find_pak_files<P: AsRef<Path>>(dir: P) -> Result<Vec<std::path::PathBuf>> {
     let mut paks = Vec::new();

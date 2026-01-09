@@ -4,12 +4,12 @@
 //! - Pre-extracted .ncs/.bin files in a directory
 //! - Directly from PAK files (streaming)
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bl4_ncs::{NcsContent, parse_header, parse_ncs_string_table};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use uextract::pak::{find_pak_files, PakReader};
+use uextract::pak::extract_with_handler;
 
 /// Known NCS types that we can fully parse
 const KNOWN_TYPES: &[&str] = &[
@@ -105,73 +105,40 @@ fn extract_from_pak_files(
     extracted: &mut Vec<ExtractedFile>,
     verbose: bool,
 ) -> Result<()> {
-    let pak_files = find_pak_files(paks_dir)?;
+    eprintln!("Scanning PAK files for NCS data...");
 
-    if pak_files.is_empty() {
-        anyhow::bail!("No PAK files found in {}", paks_dir.display());
+    // We need to collect results because the closure can't mutate stats directly
+    // due to the FnMut constraint
+    let mut pending: Vec<(String, Vec<u8>)> = Vec::new();
+
+    let pak_stats = extract_with_handler(paks_dir, Some("ncs"), |filename, raw_data| {
+        // Decompress NCS
+        let data = bl4_ncs::decompress_ncs(&raw_data)?;
+        let type_name = bl4_ncs::type_from_filename(filename);
+
+        // Apply filter if specified
+        if let Some(filter) = filter_type {
+            if !type_name.eq_ignore_ascii_case(filter) {
+                return Ok(()); // Skip but don't fail
+            }
+        }
+
+        pending.push((type_name, data));
+        Ok(())
+    })?;
+
+    eprintln!(
+        "Found {} NCS files in {} PAK archives",
+        pak_stats.files_processed, pak_stats.paks_opened
+    );
+
+    // Now process all the collected data
+    for (type_name, data) in pending {
+        stats.total_files += 1;
+        process_ncs_data(&data, &type_name, stats, extracted, verbose);
     }
 
-    eprintln!("Scanning {} PAK files for NCS data...", pak_files.len());
-
-    for pak_path in &pak_files {
-        let mut reader = match PakReader::open(pak_path) {
-            Ok(r) => r,
-            Err(e) => {
-                if verbose {
-                    eprintln!("  Skipping {:?}: {}", pak_path.file_name().unwrap_or_default(), e);
-                }
-                continue;
-            }
-        };
-
-        let ncs_files = reader.files_with_extension("ncs");
-        if ncs_files.is_empty() {
-            continue;
-        }
-
-        if verbose {
-            eprintln!("  {:?}: {} NCS files", pak_path.file_name().unwrap_or_default(), ncs_files.len());
-        }
-
-        for filename in &ncs_files {
-            stats.total_files += 1;
-
-            let raw_data = match reader.read(filename) {
-                Ok(d) => d,
-                Err(e) => {
-                    if verbose {
-                        eprintln!("    Failed to read {}: {}", filename, e);
-                    }
-                    stats.failed += 1;
-                    continue;
-                }
-            };
-
-            // Decompress NCS
-            let data = match bl4_ncs::decompress_ncs(&raw_data) {
-                Ok(d) => d,
-                Err(e) => {
-                    if verbose {
-                        eprintln!("    Failed to decompress {}: {}", filename, e);
-                    }
-                    stats.failed += 1;
-                    continue;
-                }
-            };
-
-            // Extract type name from filename
-            let type_name = bl4_ncs::type_from_filename(filename);
-
-            // Apply filter if specified
-            if let Some(filter) = filter_type {
-                if !type_name.eq_ignore_ascii_case(filter) {
-                    continue;
-                }
-            }
-
-            process_ncs_data(&data, &type_name, stats, extracted, verbose);
-        }
-    }
+    stats.failed += pak_stats.files_failed;
 
     Ok(())
 }
